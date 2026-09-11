@@ -94,6 +94,12 @@ type SearchResult struct {
 	StartAt int `gorm:"column:start_at"        json:"start_at"`
 	// End at
 	EndAt int `gorm:"column:end_at"          json:"end_at"`
+	// PageStart is the 1-based first source-document page of this chunk.
+	// 0 means unknown — callers must hide any page affordance when it is 0.
+	PageStart int `json:"page_start,omitempty"`
+	// PageEnd is the 1-based last source-document page covered by this chunk.
+	// Equal to PageStart for single-page chunks; 0 when unknown.
+	PageEnd int `json:"page_end,omitempty"`
 	// Seq
 	Seq int `gorm:"column:seq"             json:"seq"`
 	// Score

@@ -46,12 +46,20 @@ type httpImageRef struct {
 	ImageData   []byte `json:"image_data,omitempty"`
 }
 
+type httpPageSpan struct {
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+	Page  int    `json:"page"`
+	Label string `json:"label,omitempty"`
+}
+
 type httpReadResponse struct {
 	MarkdownContent string            `json:"markdown_content"`
 	ImageRefs       []httpImageRef    `json:"image_refs,omitempty"`
 	ImageDirPath    string            `json:"image_dir_path,omitempty"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
 	Error           string            `json:"error,omitempty"`
+	PageSpans       []httpPageSpan    `json:"page_spans,omitempty"`
 }
 
 // HTTPDocumentReader implements DocumentReader over HTTP/JSON.
@@ -169,6 +177,7 @@ func fromHTTPReadResponse(resp *httpReadResponse) *types.ReadResult {
 		ImageDirPath:    resp.ImageDirPath,
 		Metadata:        resp.Metadata,
 		Error:           resp.Error,
+		PageSpans:       pageSpansFromHTTP(resp.PageSpans),
 	}
 	for _, ref := range resp.ImageRefs {
 		result.ImageRefs = append(result.ImageRefs, types.ImageRef{

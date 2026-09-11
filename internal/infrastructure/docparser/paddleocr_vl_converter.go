@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -53,26 +54,33 @@ func (c *PaddleOCRVLReader) Read(ctx context.Context, req *types.ReadRequest) (*
 	logger.Infof(context.Background(), "[PaddleOCR-VL] Parsing file=%s size=%d via %s",
 		req.FileName, len(content), c.endpoint)
 
-	mdContent, imagesB64, err := c.callLayoutParsing(ctx, req, content)
+	perPage, imagesB64, err := c.callLayoutParsing(ctx, req, content)
 	if err != nil {
 		return nil, fmt.Errorf("PaddleOCR-VL layout-parsing: %w", err)
 	}
 
-	// PaddleOCR-VL renders tables as styled HTML (per-cell text-align), which
-	// wastes tokens and defeats the chunker's table-protection logic. Convert
-	// them to Markdown tables (or strip layout attributes when conversion is
-	// not possible) before downstream processing.
-	mdContent = normalizeHTMLTables(mdContent)
+	// Normalize each page's tables before joining so the recorded page offsets
+	// stay aligned with the text the chunker actually sees.
+	for i := range perPage {
+		perPage[i] = normalizeHTMLTables(perPage[i])
+	}
+	mdContent, pageSpans := joinPageSpans(perPage, "\n\n")
 
+	// processImages does not rewrite the markdown; ensureOriginalImageRef may
+	// prepend a reference for standalone image uploads (single page), shifting
+	// every offset uniformly — compensate before persisting spans.
 	imageRefs, mdContent := c.processImages(mdContent, imagesB64)
+	before := utf8.RuneCountInString(mdContent)
 	mdContent, imageRefs = ensureOriginalImageRef(req, mdContent, imageRefs)
+	shiftPageSpans(pageSpans, utf8.RuneCountInString(mdContent)-before)
 
-	logger.Infof(context.Background(), "[PaddleOCR-VL] Parsed successfully, markdown=%d chars, images=%d",
-		len(mdContent), len(imageRefs))
+	logger.Infof(context.Background(), "[PaddleOCR-VL] Parsed successfully, markdown=%d chars, images=%d, spans=%d",
+		len(mdContent), len(imageRefs), len(pageSpans))
 
 	return &types.ReadResult{
 		MarkdownContent: mdContent,
 		ImageRefs:       imageRefs,
+		PageSpans:       pageSpans,
 	}, nil
 }
 
@@ -136,9 +144,13 @@ type paddleOCRVLResponse struct {
 	} `json:"result"`
 }
 
+// callLayoutParsing returns one markdown string per page of the source
+// document (index i == page i+1) alongside the inline image payloads. The
+// caller joins them so per-page offsets can be recorded before any further
+// rewriting.
 func (c *PaddleOCRVLReader) callLayoutParsing(
 	ctx context.Context, req *types.ReadRequest, content []byte,
-) (string, map[string]string, error) {
+) ([]string, map[string]string, error) {
 	payload := paddleOCRVLRecognitionParams(c.useSeal, c.useChart)
 	payload["file"] = base64.StdEncoding.EncodeToString(content)
 	payload["fileType"] = fileTypeCode(req)
@@ -146,53 +158,54 @@ func (c *PaddleOCRVLReader) callLayoutParsing(
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", nil, fmt.Errorf("marshal payload: %w", err)
+		return nil, nil, fmt.Errorf("marshal payload: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(
 		ctx, http.MethodPost, c.endpoint+"/layout-parsing", bytes.NewReader(body),
 	)
 	if err != nil {
-		return "", nil, fmt.Errorf("create request: %w", err)
+		return nil, nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: paddleOCRVLTimeout}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return "", nil, fmt.Errorf("HTTP request: %w", err)
+		return nil, nil, fmt.Errorf("HTTP request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", nil, fmt.Errorf("read response body: %w", err)
+		return nil, nil, fmt.Errorf("read response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("PaddleOCR-VL API status %d: %s", resp.StatusCode, string(respBody))
+		return nil, nil, fmt.Errorf("PaddleOCR-VL API status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result paddleOCRVLResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", nil, fmt.Errorf("decode response: %w", err)
+		return nil, nil, fmt.Errorf("decode response: %w", err)
 	}
 	if result.ErrorCode != 0 {
-		return "", nil, fmt.Errorf("PaddleOCR-VL error %d: %s", result.ErrorCode, result.ErrorMsg)
+		return nil, nil, fmt.Errorf("PaddleOCR-VL error %d: %s", result.ErrorCode, result.ErrorMsg)
 	}
 
 	pages := result.Result.LayoutParsingResults
 	if len(pages) == 0 {
 		logger.Errorf(context.Background(), "[PaddleOCR-VL] response has no layoutParsingResults")
-		return "", nil, nil
+		return nil, nil, nil
 	}
 
-	// Merge per-page markdown and image dicts into one document.
-	texts := make([]string, 0, len(pages))
+	// Collect per-page markdown (positional: index i is page i+1) and merge the
+	// per-page image dicts into one.
+	texts := make([]string, len(pages))
 	images := make(map[string]string)
-	for _, p := range pages {
+	for i, p := range pages {
 		if t := strings.TrimSpace(p.Markdown.Text); t != "" {
-			texts = append(texts, p.Markdown.Text)
+			texts[i] = p.Markdown.Text
 		}
 		for path, data := range p.Markdown.Images {
 			if _, ok := images[path]; !ok {
@@ -202,7 +215,7 @@ func (c *PaddleOCRVLReader) callLayoutParsing(
 	}
 
 	logger.Infof(context.Background(), "[PaddleOCR-VL] parsed %d page(s), images=%d", len(pages), len(images))
-	return strings.Join(texts, "\n\n"), images, nil
+	return texts, images, nil
 }
 
 // processImages decodes the inline base64 images returned by PaddleOCR-VL and

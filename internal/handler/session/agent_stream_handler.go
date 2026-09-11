@@ -354,6 +354,8 @@ func (h *AgentStreamHandler) handleReferences(ctx context.Context, evt event.Eve
 					ChunkIndex:           int(getFloat64(refMap, "chunk_index")),
 					KnowledgeDescription: getString(refMap, "knowledge_description"),
 					KnowledgeBaseID:      getString(refMap, "knowledge_base_id"),
+					PageStart:            int(getFloat64(refMap, "page_start")),
+					PageEnd:              int(getFloat64(refMap, "page_end")),
 				}
 
 				if meta, ok := refMap["metadata"].(map[string]interface{}); ok {

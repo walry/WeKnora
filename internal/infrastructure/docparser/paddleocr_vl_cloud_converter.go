@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -70,20 +71,30 @@ func (c *PaddleOCRVLCloudReader) Read(ctx context.Context, req *types.ReadReques
 		return nil, fmt.Errorf("PaddleOCR-VL Cloud poll: %w", err)
 	}
 
-	mdContent, imagesURL, err := c.fetchResults(jsonlURL)
+	perPage, imagesURL, err := c.fetchResults(jsonlURL)
 	if err != nil {
 		return nil, fmt.Errorf("PaddleOCR-VL Cloud fetch results: %w", err)
 	}
 
-	imageRefs := c.downloadImages(mdContent, imagesURL)
-	mdContent, imageRefs = ensureOriginalImageRef(req, mdContent, imageRefs)
+	// Normalize tables per page before joining so recorded page offsets match
+	// the chunker input; cloud output mirrors the self-hosted engine.
+	for i := range perPage {
+		perPage[i] = normalizeHTMLTables(perPage[i])
+	}
+	mdContent, pageSpans := joinPageSpans(perPage, "\n\n")
 
-	logger.Infof(context.Background(), "[PaddleOCR-VL Cloud] Parsed successfully, markdown=%d chars, images=%d",
-		len(mdContent), len(imageRefs))
+	imageRefs := c.downloadImages(mdContent, imagesURL)
+	before := utf8.RuneCountInString(mdContent)
+	mdContent, imageRefs = ensureOriginalImageRef(req, mdContent, imageRefs)
+	shiftPageSpans(pageSpans, utf8.RuneCountInString(mdContent)-before)
+
+	logger.Infof(context.Background(), "[PaddleOCR-VL Cloud] Parsed successfully, markdown=%d chars, images=%d, spans=%d",
+		len(mdContent), len(imageRefs), len(pageSpans))
 
 	return &types.ReadResult{
 		MarkdownContent: mdContent,
 		ImageRefs:       imageRefs,
+		PageSpans:       pageSpans,
 	}, nil
 }
 
@@ -256,22 +267,22 @@ type paddleOCRVLCloudResultLine struct {
 	} `json:"result"`
 }
 
-func (c *PaddleOCRVLCloudReader) fetchResults(jsonlURL string) (string, map[string]string, error) {
+func (c *PaddleOCRVLCloudReader) fetchResults(jsonlURL string) ([]string, map[string]string, error) {
 	if err := utils.ValidateURLForSSRF(jsonlURL); err != nil {
-		return "", nil, fmt.Errorf("jsonl URL blocked by SSRF check: %v", err)
+		return nil, nil, fmt.Errorf("jsonl URL blocked by SSRF check: %v", err)
 	}
 	client := utils.NewSSRFSafeHTTPClient(utils.SSRFSafeHTTPClientConfig{Timeout: 120 * time.Second, MaxRedirects: 5})
 	resp, err := client.Get(jsonlURL)
 	if err != nil {
-		return "", nil, fmt.Errorf("download jsonl: %w", err)
+		return nil, nil, fmt.Errorf("download jsonl: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("download jsonl status %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("download jsonl status %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", nil, fmt.Errorf("read jsonl body: %w", err)
+		return nil, nil, fmt.Errorf("read jsonl body: %w", err)
 	}
 
 	texts := make([]string, 0)
@@ -287,9 +298,9 @@ func (c *PaddleOCRVLCloudReader) fetchResults(jsonlURL string) (string, map[stri
 			continue
 		}
 		for _, p := range parsed.Result.LayoutParsingResults {
-			if t := strings.TrimSpace(p.Markdown.Text); t != "" {
-				texts = append(texts, p.Markdown.Text)
-			}
+			// Keep one slot per page even when its markdown is empty, so the
+			// slice index i always maps to page i+1 (joinPageSpans relies on it).
+			texts = append(texts, p.Markdown.Text)
 			for path, u := range p.Markdown.Images {
 				if _, ok := images[path]; !ok {
 					images[path] = u
@@ -299,7 +310,7 @@ func (c *PaddleOCRVLCloudReader) fetchResults(jsonlURL string) (string, map[stri
 	}
 
 	logger.Infof(context.Background(), "[PaddleOCR-VL Cloud] fetched %d page(s), images=%d", len(texts), len(images))
-	return strings.Join(texts, "\n\n"), images, nil
+	return texts, images, nil
 }
 
 // downloadImages fetches each referenced image URL and builds ImageRef entries.

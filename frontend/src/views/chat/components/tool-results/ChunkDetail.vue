@@ -13,6 +13,10 @@
         <span class="field-label">{{ $t('chat.positionLabel') }}</span>
         <span class="field-value">{{ $t('chat.chunkPositionValue', { index: data.chunk_index }) }}</span>
       </div>
+      <div v-if="pageLabel" class="info-field">
+        <span class="field-label">{{ $t('chat.sourcePageLabel') }}</span>
+        <span class="field-value">{{ pageLabel }}</span>
+      </div>
       <div v-if="data.content_length" class="info-field">
         <span class="field-label">{{ $t('chat.contentLengthLabelSimple') }}</span>
         <span class="field-value">{{ $t('chat.lengthChars', { value: data.content_length }) }}</span>
@@ -35,7 +39,7 @@
 </template>
 
 <script setup lang="ts">
-import { defineProps } from 'vue';
+import { computed, defineProps } from 'vue';
 import type { ChunkDetailData } from '@/types/tool-results';
 import { useI18n } from 'vue-i18n';
 
@@ -44,6 +48,17 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+
+// "第 3 页" for a single page, "第 3-4 页" when the chunk spans pages; empty
+// when the page is unknown (page_start <= 0), so the UI can hide the field.
+const pageLabel = computed(() => {
+  const { page_start, page_end } = props.data;
+  if (!page_start || page_start <= 0) return '';
+  const end = page_end && page_end > page_start ? page_end : page_start;
+  return end > page_start
+    ? t('chat.pageRangeValue', { start: page_start, end })
+    : t('chat.pagePositionValue', { page: page_start });
+});
 
 const copyToClipboard = () => {
   const text = props.data.content;

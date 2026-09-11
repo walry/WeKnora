@@ -319,6 +319,16 @@ let url = ref('')
 // 视图模式：chunks / merged / preview
 // file 类型默认「预览」，URL / 手动创建 默认「全文」
 const viewMode = ref<'chunks' | 'merged' | 'preview'>('merged');
+// Source-document page to open the preview at (passed to <DocumentPreview>).
+// 0 means "first page". Set when the user jumps from a chunk to its page.
+const previewPage = ref(0);
+
+const jumpToChunkPage = (chunk: any) => {
+  const page = Number(chunk?.page_start);
+  if (!page || page <= 0) return;
+  previewPage.value = page;
+  viewMode.value = 'preview';
+};
 
 // 合并后的文档内容（在下方通过 computed 定义）
 
@@ -1259,6 +1269,11 @@ const handleDetailsScroll = () => {
               <div class="chunk-item" v-for="(chunk, index) in processedChunks" :key="index">
                 <div class="chunk-header">
                   <span class="chunk-index">{{ $t('knowledgeBase.segment') }} {{ index + 1 }}</span>
+                  <t-tag v-if="chunk.original.page_start > 0" size="small" theme="warning" variant="light"
+                    class="chunk-page-tag" @click="jumpToChunkPage(chunk.original)"
+                    :title="$t('knowledgeBase.jumpToPageTitle', { page: chunk.original.page_start })">
+                    {{ $t('knowledgeBase.pageLabel', { page: chunk.original.page_start }) }}
+                  </t-tag>
                   <div class="chunk-header-right">
                     <t-tag v-if="chunk.hasParent" size="small" theme="primary" variant="light">
                       {{ $t('knowledgeBase.childChunk') }}
@@ -1311,7 +1326,7 @@ const handleDetailsScroll = () => {
           <!-- 文档预览视图 -->
           <div v-else-if="viewMode === 'preview'">
             <DocumentPreview :knowledgeId="details.id" :fileType="details.file_type" :fileName="details.title"
-              :active="viewMode === 'preview'" />
+              :active="viewMode === 'preview'" :page="previewPage" />
           </div>
         </section>
       </div>

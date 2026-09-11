@@ -599,6 +599,8 @@ func (p *PluginSearch) tryDirectChunkLoading(ctx context.Context, tenantID uint6
 			ChunkMetadata: chunk.Metadata,
 			StartAt:       chunk.StartAt,
 			EndAt:         chunk.EndAt,
+			PageStart:     chunk.PageStart,
+			PageEnd:       chunk.PageEnd,
 		}
 
 		if k, ok := knowledgeMap[chunk.KnowledgeID]; ok {

@@ -140,6 +140,8 @@ CREATE TABLE chunks (
     is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     start_at INTEGER NOT NULL,
     end_at INTEGER NOT NULL,
+    page_start INTEGER NOT NULL DEFAULT 0,
+    page_end INTEGER NOT NULL DEFAULT 0,
     pre_chunk_id VARCHAR(36),
     next_chunk_id VARCHAR(36),
     chunk_type VARCHAR(20) NOT NULL DEFAULT 'text',

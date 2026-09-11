@@ -138,6 +138,13 @@ type Chunk struct {
 	StartAt int `json:"start_at"`
 	// Ending character position in the original text
 	EndAt int `json:"end_at"`
+	// PageStart is the 1-based first page of the source document this chunk
+	// belongs to. 0 means the page is unknown (format has no page concept, or
+	// the document predates page tracking).
+	PageStart int `json:"page_start"              gorm:"type:int;default:0"`
+	// PageEnd is the 1-based last page covered by this chunk. Equal to
+	// PageStart for single-page chunks; 0 when unknown.
+	PageEnd int `json:"page_end"                gorm:"type:int;default:0"`
 	// Previous chunk ID
 	PreChunkID string `json:"pre_chunk_id"`
 	// Next chunk ID

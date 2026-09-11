@@ -21,6 +21,7 @@ from docreader.proto.docreader_pb2 import (
     ReadRequest,
     ReadResponse,
     ImageRef,
+    PageSpan,
     ReadStreamMeta,
     ReadStreamResponse,
     ListEnginesResponse,
@@ -146,6 +147,23 @@ def _iter_image_refs(images: dict):
         )
 
 
+def _page_spans(result) -> list:
+    """Convert ``Document.page_spans`` ([start, end, page] triples) to protobuf.
+
+    Offsets are Unicode code-point (rune) offsets, matching Go's
+    ``len([]rune(s))``, so no translation is needed on the Go side.
+    """
+    raw = getattr(result, "page_spans", None) or []
+    spans = []
+    for entry in raw:
+        if not entry or len(entry) < 3:
+            continue
+        spans.append(
+            PageSpan(start=int(entry[0]), end=int(entry[1]), page=int(entry[2]))
+        )
+    return spans
+
+
 class DocReaderServicer(docreader_pb2_grpc.DocReaderServicer):
     def __init__(self):
         super().__init__()
@@ -209,11 +227,13 @@ class DocReaderServicer(docreader_pb2_grpc.DocReaderServicer):
                     metadata={k: _c(str(v)) for k, v in result.metadata.items()}
                     if result.metadata
                     else {},
+                    page_spans=_page_spans(result),
                 )
                 logger.info(
-                    "Read response: content_len=%d, images=%d",
+                    "Read response: content_len=%d, images=%d, page_spans=%d",
                     len(result.content),
                     len(image_refs),
+                    len(response.page_spans),
                 )
                 return response
 
@@ -258,6 +278,7 @@ class DocReaderServicer(docreader_pb2_grpc.DocReaderServicer):
                     if result.metadata
                     else {},
                     image_count=image_count,
+                    page_spans=_page_spans(result),
                 )
             )
 

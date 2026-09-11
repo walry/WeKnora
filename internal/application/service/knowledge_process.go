@@ -394,6 +394,8 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 				UpdatedAt:       time.Now(),
 				StartAt:         pc.Start,
 				EndAt:           pc.End,
+				PageStart:       pc.PageStart,
+				PageEnd:         pc.PageEnd,
 				ChunkType:       types.ChunkTypeParentText,
 			}
 		}
@@ -434,6 +436,8 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 			UpdatedAt:       time.Now(),
 			StartAt:         int(chunkData.Start),
 			EndAt:           int(chunkData.End),
+			PageStart:       chunkData.PageStart,
+			PageEnd:         chunkData.PageEnd,
 			ChunkType:       types.ChunkTypeText,
 		}
 
@@ -2489,6 +2493,8 @@ func (s *knowledgeService) UpdateImageInfo(
 			Content:         image.Caption,
 			ChunkType:       types.ChunkTypeImageCaption,
 			ParentChunkID:   chunk.ID,
+			PageStart:       chunk.PageStart,
+			PageEnd:         chunk.PageEnd,
 			ImageInfo:       imageInfo,
 		}
 		addChunk = append(addChunk, captionChunk)
@@ -2505,6 +2511,8 @@ func (s *knowledgeService) UpdateImageInfo(
 			Content:         image.OCRText,
 			ChunkType:       types.ChunkTypeImageOCR,
 			ParentChunkID:   chunk.ID,
+			PageStart:       chunk.PageStart,
+			PageEnd:         chunk.PageEnd,
 			ImageInfo:       imageInfo,
 		}
 		addChunk = append(addChunk, ocrChunk)
@@ -3066,6 +3074,21 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 			}
 		}
 		logger.Infof(ctx, "Split document into %d chunks for knowledge %s", len(chunks), knowledge.ID)
+	}
+
+	// Resolve each chunk's source-document page range from the parse-time page
+	// spans. Spans are keyed by rune offset into the original markdown — exactly
+	// what the chunker records in ParsedChunk.Start/End — so the mapping is a
+	// simple lookup. Chunks predating page tracking (no spans) keep 0.
+	if convertResult != nil && len(convertResult.PageSpans) > 0 {
+		spans := convertResult.PageSpans
+		for i := range chunks {
+			chunks[i].PageStart, chunks[i].PageEnd = types.ResolvePageRange(spans, chunks[i].Start, chunks[i].End)
+		}
+		for i := range processOpts.ParentChunks {
+			pc := &processOpts.ParentChunks[i]
+			pc.PageStart, pc.PageEnd = types.ResolvePageRange(spans, pc.Start, pc.End)
+		}
 	}
 
 	// Step 4: Process chunks (vectorize + index + enqueue async tasks)

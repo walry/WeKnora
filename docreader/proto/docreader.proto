@@ -43,12 +43,25 @@ message ImageRef {
   bytes  image_data = 5;     // inline bytes fallback
 }
 
+// PageSpan maps a half-open rune-offset range [start, end) inside
+// markdown_content back to a page of the source document. Offsets are counted
+// in Unicode code points (Python len(str) == Go len([]rune(s))) so both sides
+// agree without conversion. Parsers that have no page concept (plain text,
+// markdown, ...) leave page_spans empty and the feature degrades silently.
+message PageSpan {
+  int32 start = 1; // inclusive rune offset into markdown_content
+  int32 end = 2;   // exclusive rune offset into markdown_content
+  int32 page = 3;  // 1-based logical page number
+  string label = 4; // optional human label (sheet name, slide title, ...)
+}
+
 message ReadResponse {
   string markdown_content = 1;
   repeated ImageRef image_refs = 2;
   string image_dir_path = 3;
   map<string, string> metadata = 4;
   string error = 5;
+  repeated PageSpan page_spans = 6;
 }
 
 // Metadata header for a streamed read. Sent exactly once, before any image.
@@ -58,6 +71,7 @@ message ReadStreamMeta {
   map<string, string> metadata = 3;
   string error = 4;
   uint32 image_count = 5; // best-effort total image count (0 if unknown)
+  repeated PageSpan page_spans = 6;
 }
 
 // One frame of a ReadStream. The first frame carries `meta`; every subsequent

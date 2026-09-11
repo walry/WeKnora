@@ -1331,10 +1331,16 @@ class PDFScannedParser(BaseParser):
                 finally:
                     _close_pdfium_resource(pdf)
 
+            spans = []  # each: [start, end, page]
             for i in range(page_count):
                 page_filename = f"{base_name}_page_{i+1}.jpg"
                 ref_path = f"images/{page_filename}"
-                markdown_lines.append(f"![{page_filename}]({ref_path})")
+                block = f"![{page_filename}]({ref_path})"
+                start = sum(len(line) for line in markdown_lines) + 2 * len(
+                    markdown_lines
+                )
+                markdown_lines.append(block)
+                spans.append([start, start + len(block), i + 1])
                 images[ref_path] = base64.b64encode(rendered[i]).decode("utf-8")
 
             text = "\n\n".join(markdown_lines)
@@ -1345,6 +1351,7 @@ class PDFScannedParser(BaseParser):
                     "image_source_type": "scanned_pdf",
                     "page_count": page_count,
                 },
+                page_spans=spans,
             )
         except Exception as e:
             logger.exception("PDFScannedParser failed to parse PDF: %s", e)
@@ -1504,27 +1511,44 @@ class PDFParser(BaseParser):
         finally:
             _close_pdfium_resource(pdf)
 
-        # Assemble markdown in reading order.
+        # Assemble markdown in reading order, recording each page's rune-offset
+        # span so downstream chunking can map a chunk back to its source page.
+        #
+        # Offsets are Unicode code points (len(str) == Go len([]rune(s))), so no
+        # conversion is needed on either side. Spans are contiguous: each span's
+        # end is the next span's start (and the last ends at len(content)), so an
+        # offset landing on the "\n\n" separator between pages still resolves.
+        # Every page gets a span (including empty pages) so the page number stays
+        # aligned with the source document.
         embedded_count = 0
         vector_figure_count = 0
-        blocks = []
+        content_text = ""
+        spans = []  # each: [start, end, page]
         for i in range(page_count):
+            # Build this page's markdown block exactly as before (text, then one
+            # "\n\n![...]" line per embedded figure), then record its offset span.
             if classes[i] == "scanned":
                 page_filename = f"{base_name}_page_{i+1}.jpg"
-                blocks.append(f"![{page_filename}](images/{page_filename})")
+                page_block = f"![{page_filename}](images/{page_filename})"
             else:
-                stripped = texts[i].strip()
-                if stripped:
-                    blocks.append(stripped)
+                page_block = texts[i].strip()
                 vector_figure_count += len(vector_clips.get(i, []))
                 page_images = list(embedded.get(i, []))
                 page_images.sort(key=lambda item: item[2], reverse=True)
                 for ref_path, _b64, _y in page_images:
                     fname = os.path.basename(ref_path)
-                    blocks.append(f"![{fname}]({ref_path})")
+                    if page_block:
+                        page_block += "\n\n"
+                    page_block += f"![{fname}]({ref_path})"
                     embedded_count += 1
-
-        content_text = "\n\n".join(blocks).strip()
+            # Pages are joined with a blank-line separator, so offsets stay
+            # aligned with the original rune positions the chunker will report.
+            if content_text:
+                content_text += "\n\n"
+            start = len(content_text)
+            content_text += page_block
+            end = len(content_text)
+            spans.append([start, end, i + 1])
 
         metadata = {
             "page_count": page_count,
@@ -1537,12 +1561,13 @@ class PDFParser(BaseParser):
 
         logger.info(
             "PDFParser: %s -> %d pages (%d scanned, %d text), "
-            "embedded_images=%d, content_len=%d",
+            "embedded_images=%d, content_len=%d, page_spans=%d",
             self.file_name,
             page_count,
             len(scanned_indices),
             page_count - len(scanned_indices),
             embedded_count,
             len(content_text),
+            len(spans),
         )
-        return Document(content=content_text, images=images, metadata=metadata)
+        return Document(content=content_text, images=images, metadata=metadata, page_spans=spans)

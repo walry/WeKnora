@@ -52,6 +52,9 @@ export interface ChunkItem {
     chunk_index: number;
     content: string;
     knowledge_id: string;
+    // 1-based source-document page this chunk belongs to; 0 = unknown.
+    page_start?: number;
+    page_end?: number;
 }
 
 // Knowledge base item
@@ -86,6 +89,9 @@ export interface ChunkDetailData {
     chunk_index: number;
     knowledge_id: string;
     content_length?: number;
+    // 1-based source-document page; 0 = unknown.
+    page_start?: number;
+    page_end?: number;
 }
 
 // Related chunks data

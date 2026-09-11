@@ -216,6 +216,8 @@ func chunk2SearchResult(chunk *types.Chunk, knowledge *types.Knowledge) *types.S
 		KnowledgeTitle:    knowledge.Title,
 		StartAt:           chunk.StartAt,
 		EndAt:             chunk.EndAt,
+		PageStart:         chunk.PageStart,
+		PageEnd:           chunk.PageEnd,
 		Seq:               chunk.ChunkIndex,
 		Score:             1.0,
 		MatchType:         types.MatchTypeGraph,

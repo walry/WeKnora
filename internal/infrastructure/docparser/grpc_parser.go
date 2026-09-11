@@ -174,6 +174,7 @@ func (p *GRPCDocumentReader) readStream(
 			result.ImageDirPath = meta.GetImageDirPath()
 			result.Metadata = meta.GetMetadata()
 			result.Error = meta.GetError()
+			result.PageSpans = pageSpansFromProto(meta.GetPageSpans())
 			if n := meta.GetImageCount(); n > 0 {
 				result.ImageRefs = make([]types.ImageRef, 0, n)
 			}
@@ -212,6 +213,7 @@ func (p *GRPCDocumentReader) readUnary(
 		ImageDirPath:    resp.GetImageDirPath(),
 		Metadata:        resp.GetMetadata(),
 		Error:           resp.GetError(),
+		PageSpans:       pageSpansFromProto(resp.GetPageSpans()),
 	}
 	if refs := resp.GetImageRefs(); len(refs) > 0 {
 		result.ImageRefs = make([]types.ImageRef, 0, len(refs))

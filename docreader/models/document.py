@@ -74,6 +74,14 @@ class Document(BaseModel):
         default_factory=dict,
         description="metadata fields",
     )
+    # page_spans maps each region of `content` back to a source-document page.
+    # Each entry is [start, end, page] where start/end are Unicode code-point
+    # (rune) offsets into `content` and page is 1-based. Offsets are inclusive
+    # of start and exclusive of end, and are expected to be contiguous so every
+    # offset resolves to a page. Empty when the parser has no page concept.
+    page_spans: List[List[int]] = Field(
+        default_factory=list, description="page spans [start, end, page]"
+    )
 
     def set_content(self, content: str) -> None:
         """Set document content."""

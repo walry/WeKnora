@@ -1,6 +1,6 @@
 // @ts-nocheck
 <script setup lang="ts">
-import { ref, shallowRef, watch, onUnmounted, nextTick, defineAsyncComponent } from 'vue';
+import { ref, shallowRef, watch, onUnmounted, nextTick, defineAsyncComponent, computed } from 'vue';
 import { previewKnowledgeFile } from '@/api/knowledge-base/index';
 import { MessagePlugin } from 'tdesign-vue-next';
 import hljs from 'highlight.js';
@@ -20,6 +20,9 @@ const props = defineProps<{
   fileType: string;
   fileName: string;
   active: boolean;
+  // 1-based source page to open the preview at (PDF jumps via the viewer's
+  // #page=N fragment). 0 / undefined means "open at the first page".
+  page?: number;
 }>();
 
 const loading = ref(false);
@@ -35,6 +38,16 @@ const docxContainer = ref<HTMLElement | null>(null);
 const imageNaturalWidth = ref(0);
 const imageNaturalHeight = ref(0);
 let loadedForId = '';
+
+// PDF viewer fragments (#page=N) are honored on load, so we append the page to
+// the blob URL. Changing only the fragment re-renders the iframe via the bound
+// :src without re-fetching the (potentially large) blob.
+const pdfSrc = computed(() => {
+  const base = blobUrl.value;
+  if (!base) return base;
+  if (props.page && props.page > 0) return `${base}#page=${props.page}`;
+  return base;
+});
 
 const isFullscreen = ref(false);
 
@@ -385,7 +398,7 @@ onUnmounted(() => {
 
     <!-- PDF -->
     <div v-else-if="previewType === 'pdf' && blobUrl" class="preview-pdf">
-      <iframe :src="blobUrl" class="pdf-iframe" />
+      <iframe :src="pdfSrc" class="pdf-iframe" />
     </div>
 
     <!-- Image -->
