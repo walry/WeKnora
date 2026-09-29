@@ -1,4 +1,11 @@
-export type CitationChunkCacheValue = { content: string; error?: string }
+export type CitationChunkCacheValue = {
+  content: string
+  error?: string
+  /** 1-based source page of the chunk (0 = unknown). */
+  page?: number
+  /** Parent knowledge/document ID used to open the source preview. */
+  docId?: string
+}
 
 const chunkCache = new Map<string, CitationChunkCacheValue>()
 

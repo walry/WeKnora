@@ -5094,6 +5094,7 @@ export default {
       loadFailed: '로드 실패',
       chunkId: '청크 ID',
       noKbForWiki: '연결된 지식베이스를 식별할 수 없어 Wiki를 열 수 없습니다',
+      viewSourcePage: '원문 {page}페이지 보기',
     },
     toolSummary: {
       getDocument: '문서 조회: {title}',

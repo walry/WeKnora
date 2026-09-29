@@ -12,6 +12,10 @@
         <div v-if="float.loading" class="chat-citation-float__muted">{{ loadingText }}</div>
         <div v-else-if="float.error" class="chat-citation-float__error">{{ float.error }}</div>
         <div v-else class="chat-citation-float__body">{{ float.content }}</div>
+        <a v-if="float.canPreview" class="chat-citation-float__source-link" :href="float.previewUrl" target="_blank"
+          rel="noopener noreferrer">
+          {{ $t('agentStream.citation.viewSourcePage', { page: float.page }) }}
+        </a>
       </template>
     </div>
   </Teleport>

@@ -112,6 +112,15 @@ const router = createRouter({
           meta: { requiresInit: true, requiresAuth: true }
         },
         {
+          // Standalone full-page document preview opened in a new tab from
+          // chat citations (e.g. "查看原文第 N 页"). Query:
+          // knowledgeId, fileType, fileName, page.
+          path: "document-preview",
+          name: "documentPreview",
+          component: () => import("../views/knowledge/DocumentPreviewPage.vue"),
+          meta: { requiresInit: true, requiresAuth: true }
+        },
+        {
           path: "knowledge-search",
           // 旧路径保留为重定向，打开全局命令面板（⌘K），带上可选的 q 参数
           redirect: (to) => {

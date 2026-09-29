@@ -20,6 +20,14 @@ type FloatState = {
   url: string
   loading: boolean
   error: string
+  /** 1-based source page of the cited chunk (0 = unknown). */
+  page: number
+  /** Parent knowledge/document ID of the cited chunk. */
+  docId: string
+  /** Whether a source-document preview link should be shown. */
+  canPreview: boolean
+  /** New-tab URL that opens the source document at `page`. */
+  previewUrl: string
 }
 
 export type CitationFloatState = FloatState
@@ -54,6 +62,10 @@ export function useChatCitationPopover(
     url: '',
     loading: false,
     error: '',
+    page: 0,
+    docId: '',
+    canPreview: false,
+    previewUrl: '',
   })
 
   let hoverTimer: number | null = null
@@ -65,6 +77,13 @@ export function useChatCitationPopover(
     float.value.left = Math.min(rect.left + window.scrollX, window.innerWidth - 320)
   }
 
+  const resetSourceLink = () => {
+    float.value.page = 0
+    float.value.docId = ''
+    float.value.canPreview = false
+    float.value.previewUrl = ''
+  }
+
   const openWeb = (el: HTMLElement) => {
     const url = el.getAttribute('data-url') || ''
     float.value.type = 'web'
@@ -73,8 +92,59 @@ export function useChatCitationPopover(
     float.value.content = ''
     float.value.loading = false
     float.value.error = ''
+    resetSourceLink()
     float.value.visible = true
     positionFor(el)
+  }
+
+  const isEmbedMode = () => {
+    return !!(options?.embedChannelId?.() && options?.embedToken?.())
+  }
+
+  /** Extension-derived PDF check against the retrieval references. */
+  const isPdfDocument = (docId: string, doc: string): boolean => {
+    const refs = (options?.getKnowledgeReferences?.() || []).filter(
+      (r) => r && r.chunk_type !== 'web_search',
+    )
+    if (!refs.length) return false
+
+    let hit = docId ? refs.find((r) => r.knowledge_id === docId) : undefined
+    if (!hit && doc) {
+      const target = doc.trim().toLowerCase()
+      hit = refs.find((r) => {
+        const title = (r.knowledge_title || '').trim().toLowerCase()
+        const filename = (r.knowledge_filename || '').trim().toLowerCase()
+        for (const name of [title, filename]) {
+          if (name && (name === target || name.includes(target) || target.includes(name))) {
+            return true
+          }
+        }
+        return false
+      })
+    }
+
+    const name = (hit?.knowledge_filename || hit?.knowledge_title || '').toLowerCase()
+    return name.endsWith('.pdf')
+  }
+
+  const applySourceLink = (docId: string, rawPage: unknown) => {
+    const page = Number(rawPage) || 0
+    float.value.page = page > 0 ? page : 0
+    float.value.docId = docId || ''
+    const showable =
+      !isEmbedMode() && float.value.page > 0 && !!docId && isPdfDocument(docId, float.value.title)
+    float.value.canPreview = showable
+    if (!showable) {
+      float.value.previewUrl = ''
+      return
+    }
+    const params = new URLSearchParams({
+      knowledgeId: docId,
+      fileType: 'pdf',
+      fileName: float.value.title || '',
+      page: String(float.value.page),
+    })
+    float.value.previewUrl = `/platform/document-preview?${params.toString()}`
   }
 
   const fetchChunkContent = async (chunkId: string) => {
@@ -99,6 +169,7 @@ export function useChatCitationPopover(
     float.value.type = 'kb'
     float.value.title = title
     float.value.url = ''
+    resetSourceLink()
     float.value.visible = true
     positionFor(el, 4)
 
@@ -108,6 +179,9 @@ export function useChatCitationPopover(
       float.value.content = cached.content
       float.value.error = cached.error || ''
       float.value.loading = false
+      if (cached.docId) {
+        applySourceLink(cached.docId, cached.page)
+      }
       return
     }
 
@@ -117,14 +191,18 @@ export function useChatCitationPopover(
     try {
       const res = await fetchChunkContent(chunkId)
       const content = String(res?.data?.content || '').trim()
+      const docId = String(res?.data?.knowledge_id || '')
+      const page = Number(res?.data?.page_start) || 0
       if (!content) {
         const msg = t('agentStream.citation.notFound')
-        setCitationChunkCache(scope, chunkId, { content: '', error: msg })
+        setCitationChunkCache(scope, chunkId, { content: '', error: msg, docId, page })
         float.value.error = msg
+        applySourceLink(docId, page)
         return
       }
-      setCitationChunkCache(scope, chunkId, { content })
+      setCitationChunkCache(scope, chunkId, { content, docId, page })
       float.value.content = content
+      applySourceLink(docId, page)
     } catch {
       const msg = t('agentStream.citation.loadFailed')
       setCitationChunkCache(scope, chunkId, { content: '', error: msg })

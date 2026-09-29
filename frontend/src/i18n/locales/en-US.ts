@@ -5082,6 +5082,7 @@ export default {
       loadFailed: 'Failed to load',
       chunkId: 'Chunk ID',
       noKbForWiki: 'Unable to identify associated knowledge base. Cannot open Wiki.',
+      viewSourcePage: 'View source page {page}',
     },
     toolSummary: {
       getDocument: 'Get document: {title}',

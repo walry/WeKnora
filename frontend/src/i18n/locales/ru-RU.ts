@@ -4594,6 +4594,7 @@ export default {
       loadFailed: 'Ошибка загрузки',
       chunkId: 'ID фрагмента',
       noKbForWiki: 'Не удалось определить связанную базу знаний, Wiki не может быть открыта',
+      viewSourcePage: 'Открыть страницу {page} источника',
     },
     toolSummary: {
       getDocument: 'Получить документ: {title}',

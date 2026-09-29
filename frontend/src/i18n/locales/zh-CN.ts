@@ -5100,6 +5100,7 @@ export default {
       loadFailed: "加载失败",
       chunkId: "片段ID",
       noKbForWiki: "无法识别关联的知识库，无法打开 Wiki",
+      viewSourcePage: "查看原文第 {page} 页",
     },
     toolSummary: {
       getDocument: "获取文档：{title}",
