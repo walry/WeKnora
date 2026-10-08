@@ -17,6 +17,7 @@
         :fileName="fileName"
         :active="true"
         :page="page"
+        :startFullscreen="true"
       />
       <div v-else class="document-preview-page__error">{{ $t('preview.loadFailed') }}</div>
     </div>

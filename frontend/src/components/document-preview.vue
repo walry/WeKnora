@@ -1,6 +1,6 @@
 // @ts-nocheck
 <script setup lang="ts">
-import { ref, shallowRef, watch, onUnmounted, nextTick, defineAsyncComponent, computed } from 'vue';
+import { ref, shallowRef, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent, computed } from 'vue';
 import { previewKnowledgeFile } from '@/api/knowledge-base/index';
 import { MessagePlugin } from 'tdesign-vue-next';
 import hljs from 'highlight.js';
@@ -23,6 +23,10 @@ const props = defineProps<{
   // 1-based source page to open the preview at (PDF jumps via the viewer's
   // #page=N fragment). 0 / undefined means "open at the first page".
   page?: number;
+  // When true the preview opens fullscreen immediately. Used by the
+  // standalone /platform/document-preview page reached from chat citations
+  // ("查看原文第 N 页") so the source document fills the viewport on arrival.
+  startFullscreen?: boolean;
 }>();
 
 const loading = ref(false);
@@ -49,7 +53,7 @@ const pdfSrc = computed(() => {
   return base;
 });
 
-const isFullscreen = ref(false);
+const isFullscreen = ref(Boolean(props.startFullscreen));
 
 function toggleFullscreen() {
   isFullscreen.value = !isFullscreen.value;
@@ -59,6 +63,12 @@ function toggleFullscreen() {
     document.body.style.overflow = '';
   }
 }
+
+onMounted(() => {
+  if (isFullscreen.value) {
+    document.body.style.overflow = 'hidden';
+  }
+});
 
 
 const fileTypeMap: Record<string, typeof previewType.value> = {};
