@@ -74,15 +74,23 @@ docreader:
 
 ### gRPC 配置
 
-- `DOCREADER_GRPC_MAX_WORKERS`: gRPC 服务的最大工作线程数（默认：4）
+- `DOCREADER_GRPC_MAX_WORKERS`: gRPC 服务的最大工作线程数（默认：4）。
+  pdfium（pypdfium2）默认构建非线程安全，DocReader 会在单进程内串行所有 pdfium 访问，
+  因此该值 >1 是安全的，**不再需要为规避并发问题而强制设为 1**；提高该值可让健康检查、
+  ListEngines 等轻量请求与小文档在有大 PDF 在解析时仍能得到处理。
 - `DOCREADER_GRPC_PORT`: gRPC 服务监听端口（默认：50051）
 
 ### 解析器资源控制
 
+- `DOCREADER_PDFIUM_SERIALIZE`: 是否在单进程内串行所有 pdfium 访问（默认：true）。
+  pdfium/pypdfium2 默认构建非线程安全，请保持 true；仅在确知使用线程安全的 pdfium
+  构建时才可设为 false。
 - `DOCREADER_MARKITDOWN_MAX_WORKERS`: MarkItDown 解析的最大并发数（默认：1，设为 0 可关闭限流）
 - `DOCREADER_PDF_RENDER_MAX_WORKERS`: 扫描 PDF 渲染为图片的最大并发数（默认：1，设为 0 可关闭限流）
 - `DOCREADER_PDF_RENDER_DPI`: 扫描 PDF 渲染 DPI（默认：200）
 - `DOCREADER_PDF_JPEG_QUALITY`: 扫描 PDF 输出 JPEG 质量（默认：90，范围会自动限制在 1-95）
+- `DOCREADER_DOCX_MAX_WORKERS`: DOCX 多进程解析的最大并发数（默认：1，设为 0 可关闭限流）
+- `DOCREADER_WEB_SCRAPE_MAX_WORKERS`: 网页抓取（Playwright）的最大并发数（默认：1，设为 0 可关闭限流）
 
 ### OCR / VLM
 

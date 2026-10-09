@@ -8,7 +8,6 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from io import BytesIO
-from multiprocessing import Manager
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -44,6 +43,7 @@ from PIL import Image
 from docreader.config import CONFIG
 from docreader.models.document import Document as DocumentModel
 from docreader.parser.base_parser import BaseParser
+from docreader.parser.concurrency import _select_mp_context, parser_worker_limit
 from docreader.utils import endecode
 
 logger = logging.getLogger(__name__)
@@ -772,18 +772,20 @@ class Docx:
             args_list: List of arguments
             max_workers: Maximum number of workers
         """
-        # Use a shared manager to share data
-        with Manager() as manager:
-            # Create shared data structures
-            self.all_lines = manager.list()
+        # Use ProcessPoolExecutor to truly implement multi-core parallelization
+        logger.info(
+            f"Processing {len(args_list)} pages using {max_workers} processes"
+        )
 
-            logger.info(
-                f"Processing {len(args_list)} pages using {max_workers} processes"
-            )
-
-            # Use ProcessPoolExecutor to truly implement multi-core parallelization
-            batch_start_time = time.time()
-            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Use the safest available start method: a plain fork() from the
+        # multithreaded gRPC process can deadlock the child (inherited locks).
+        # Heavy fan-out is bounded by a process-wide limiter so concurrent
+        # requests cannot spawn an unbounded number of workers.
+        batch_start_time = time.time()
+        with parser_worker_limit("docx_mp", CONFIG.docx_mp_max_workers):
+            with ProcessPoolExecutor(
+                max_workers=max_workers, mp_context=_select_mp_context()
+            ) as executor:
                 logger.info(f"Started ProcessPoolExecutor with {max_workers} workers")
 
                 # Submit all tasks

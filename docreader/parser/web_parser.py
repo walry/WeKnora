@@ -12,6 +12,7 @@ from docreader.config import CONFIG
 from docreader.models.document import Document
 from docreader.parser.base_parser import BaseParser
 from docreader.parser.chain_parser import PipelineParser
+from docreader.parser.concurrency import parser_worker_limit
 from docreader.parser.markdown_parser import MarkdownParser
 from docreader.utils import endecode
 
@@ -215,7 +216,10 @@ class StdWebParser(BaseParser):
         url = endecode.decode_bytes(content)
 
         logger.info(f"Scraping web page: {url}")
-        scrape_result = asyncio.run(self.scrape(url))
+        # Each scrape launches a fresh headless browser, so bound concurrent
+        # scrapes across requests to avoid exhausting memory/CPU.
+        with parser_worker_limit("web_scrape", CONFIG.web_scrape_max_workers):
+            scrape_result = asyncio.run(self.scrape(url))
         if not scrape_result.html and not scrape_result.visible_text:
             logger.error("Failed to scrape web page (no HTML or visible text)")
             return Document(content=f"Error parsing web page: {url}")

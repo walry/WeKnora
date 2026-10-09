@@ -1,14 +1,25 @@
 import base64
+import contextlib
 import io
 import threading
 import time
 import unittest
 import uuid
+from unittest import mock
 
 from PIL import Image
 
-from docreader.parser.concurrency import parser_worker_limit
-from docreader.parser.pdf_parser import PDFScannedParser, _normalize_image_quality
+from docreader.config import CONFIG
+from docreader.parser import pdf_parser
+from docreader.parser.concurrency import parser_worker_limit, pdfium_lock
+from docreader.parser.pdf_parser import PDFParser, PDFScannedParser, _normalize_image_quality
+
+
+def _make_scanned_pdf(pages: int = 2, size=(64, 64)) -> bytes:
+    buf = io.BytesIO()
+    imgs = [Image.new("RGB", size, "white") for _ in range(pages)]
+    imgs[0].save(buf, format="PDF", save_all=True, append_images=imgs[1:])
+    return buf.getvalue()
 
 
 class ParserConcurrencyTest(unittest.TestCase):
@@ -39,6 +50,88 @@ class ParserConcurrencyTest(unittest.TestCase):
             thread.join()
 
         self.assertEqual(max_active_workers, 1)
+
+    @unittest.skipUnless(CONFIG.pdfium_serialize, "pdfium serialization disabled")
+    def test_pdfium_lock_serializes_and_is_reentrant(self):
+        active = 0
+        peak = 0
+        state_lock = threading.Lock()
+        start = threading.Barrier(5)  # 4 workers + main
+
+        def worker():
+            nonlocal active, peak
+            start.wait()
+            with pdfium_lock():
+                with state_lock:
+                    active += 1
+                    peak = max(peak, active)
+                time.sleep(0.02)
+                with state_lock:
+                    active -= 1
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        start.wait()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(peak, 1)
+        # Reentrant: nested acquisition must not deadlock.
+        with pdfium_lock():
+            with pdfium_lock():
+                pass
+
+    @unittest.skipUnless(CONFIG.pdfium_serialize, "pdfium serialization disabled")
+    def test_concurrent_pdf_parses_serialize_pdfium_access(self):
+        """Concurrent PDF parses must never enter pdfium concurrently.
+
+        Regression test for the pdfium thread-safety bug: before the fix the
+        route called pdfium without any gate, so peak concurrency was > 1.
+        """
+        active = 0
+        peak = 0
+        calls = 0
+        state_lock = threading.Lock()
+        real_gate = pdfium_lock
+
+        @contextlib.contextmanager
+        def counting_pdfium_lock():
+            nonlocal active, peak, calls
+            # Delegate to the real gate so serialization is actually enforced,
+            # then observe how many threads are inside the critical section.
+            with real_gate():
+                with state_lock:
+                    calls += 1
+                    active += 1
+                    peak = max(peak, active)
+                try:
+                    yield
+                finally:
+                    with state_lock:
+                        active -= 1
+
+        pdf_bytes = _make_scanned_pdf(pages=2)
+        errors: list = []
+
+        def worker(i):
+            try:
+                PDFParser(
+                    file_name=f"scan_{i}.pdf", file_type="pdf"
+                ).parse_into_text(pdf_bytes)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        with mock.patch.object(pdf_parser, "pdfium_lock", counting_pdfium_lock):
+            threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        self.assertEqual(errors, [])
+        self.assertGreater(calls, 0, "PDF route never acquired the pdfium gate")
+        self.assertEqual(peak, 1)
 
     def test_scanned_pdf_parser_outputs_jpeg_images(self):
         pdf_bytes = io.BytesIO()

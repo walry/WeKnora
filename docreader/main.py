@@ -346,6 +346,12 @@ def main():
     server.start()
 
     logger.info("Server started on port %d", CONFIG.grpc_port)
+    logger.info(
+        "gRPC max workers=%d; in-process pdfium access is serialised "
+        "(DOCREADER_PDFIUM_SERIALIZE=%s), so multiple workers are safe.",
+        CONFIG.grpc_max_workers,
+        CONFIG.pdfium_serialize,
+    )
     logger.info("Server is ready to accept connections")
 
     try:

@@ -26,7 +26,11 @@ import statistics
 from docreader.config import CONFIG
 from docreader.models.document import Document
 from docreader.parser.base_parser import BaseParser
-from docreader.parser.concurrency import parser_worker_limit
+from docreader.parser.concurrency import (
+    _select_mp_context,
+    parser_worker_limit,
+    pdfium_lock,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1034,24 +1038,6 @@ def _render_pool_task(args):
         _close_pdfium_resource(page)
 
 
-def _select_mp_context():
-    """Pick the safest available multiprocessing start method.
-
-    ``forkserver`` forks workers from a clean, single-threaded server process,
-    avoiding the fork-in-a-multithreaded-process hazards of the gRPC server.
-    Falls back to ``fork`` and finally returns ``None`` (serial) when neither
-    is available (e.g. Windows/dev).
-    """
-    import multiprocessing as mp
-
-    for method in ("forkserver", "fork"):
-        try:
-            return mp.get_context(method)
-        except ValueError:
-            continue
-    return None
-
-
 def _render_pages_parallel(
     content: bytes, indices: list, scale: float, quality: int, max_edge: int, workers: int
 ) -> dict | None:
@@ -1120,12 +1106,15 @@ def _render_scanned_pages(
         return parallel
 
     out: dict = {}
-    for i in indices:
-        page = pdf[i]
-        try:
-            out[i] = _render_page_to_jpeg(page, scale, quality, max_edge)
-        finally:
-            _close_pdfium_resource(page)
+    # Serial fallback renders on this process's open ``pdf`` handle, so it must
+    # hold the pdfium lock (the parallel workers above have private instances).
+    with pdfium_lock():
+        for i in indices:
+            page = pdf[i]
+            try:
+                out[i] = _render_page_to_jpeg(page, scale, quality, max_edge)
+            finally:
+                _close_pdfium_resource(page)
     return out
 
 
@@ -1314,9 +1303,11 @@ class PDFScannedParser(BaseParser):
 
         try:
             with parser_worker_limit("pdf_render", CONFIG.pdf_render_max_workers):
-                pdf = pdfium.PdfDocument(content)
+                with pdfium_lock():
+                    pdf = pdfium.PdfDocument(content)
                 try:
-                    page_count = len(pdf)
+                    with pdfium_lock():
+                        page_count = len(pdf)
                     scale = max(1, CONFIG.pdf_render_dpi) / 72
                     quality = _normalize_image_quality(CONFIG.pdf_jpeg_quality)
 
@@ -1329,7 +1320,8 @@ class PDFScannedParser(BaseParser):
                         CONFIG.pdf_render_max_edge,
                     )
                 finally:
-                    _close_pdfium_resource(pdf)
+                    with pdfium_lock():
+                        _close_pdfium_resource(pdf)
 
             spans = []  # each: [start, end, page]
             for i in range(page_count):
@@ -1427,63 +1419,80 @@ class PDFParser(BaseParser):
         scale = max(1, CONFIG.pdf_render_dpi) / 72
         quality = _normalize_image_quality(CONFIG.pdf_jpeg_quality)
 
-        pdf = pdfium.PdfDocument(content)
         images: dict = {}
+        texts: list = []
+        classes: list = []
+        vector_clips: dict = {}
+        scanned_indices: list = []
+        rendered: dict = {}
+        embedded: dict = {}
+        # pdfium is not thread-safe, so every in-process access is serialised
+        # through pdfium_lock(). Open + pass 1 + pass 3 touch pdfium on this
+        # thread; pass 2 renders in child processes that each own a private
+        # pdfium instance, so the lock is released around it.
+        with pdfium_lock():
+            pdf = pdfium.PdfDocument(content)
         try:
-            page_count = len(pdf)
-
             # Pass 1: cheap text extraction + image-area classification.
-            texts: list = []
-            classes: list = []
-            vector_clips: dict = {}
-            for i in range(page_count):
-                page = pdf[i]
-                try:
-                    plain = _extract_page_text(page)
-                    ratio = _page_image_area_ratio(page, pdfium_r)
-                    cls = _classify_page(ratio, len(plain.strip()))
-                    # Layout reconstruction only pays off (and is only spent) on
-                    # native text pages; scanned pages are rendered, not read.
-                    if cls == "text" and LAYOUT_ORDERING:
-                        if _plain_is_well_formed(plain):
-                            text = plain
-                        else:
-                            layout = _extract_layout_text(page, pdfium_r)
-                            if layout and not _should_prefer_plain(plain, layout):
-                                text = layout
-                            else:
-                                text = plain
-                    else:
-                        text = plain
-                    if cls == "text":
-                        clips = _extract_vector_figure_clips(
-                            page,
-                            i,
-                            plain,
-                            pdfium_r,
-                            base_name,
-                            scale,
-                            quality,
-                            CONFIG.pdf_render_max_edge,
-                        )
-                        if clips:
-                            vector_clips[i] = clips
-                            for ref_path, b64, _y, _cap in clips:
-                                images[ref_path] = b64
-                    text = _postprocess_pdf_text(text)
-                    if cls == "text" and vector_clips.get(i):
-                        text = _inject_figure_markdown_before_captions(
-                            text, vector_clips[i]
-                        )
-                finally:
-                    _close_pdfium_resource(page)
-                texts.append(text)
-                classes.append(cls)
+            with pdfium_lock():
+                page_count = len(pdf)
 
-            texts = _strip_repeating_lines(texts, classes)
-            scanned_indices = [i for i, c in enumerate(classes) if c == "scanned"]
+                texts = []
+                classes = []
+                vector_clips = {}
+                for i in range(page_count):
+                    page = pdf[i]
+                    try:
+                        plain = _extract_page_text(page)
+                        ratio = _page_image_area_ratio(page, pdfium_r)
+                        cls = _classify_page(ratio, len(plain.strip()))
+                        # Layout reconstruction only pays off (and is only spent)
+                        # on native text pages; scanned pages are rendered, not
+                        # read.
+                        if cls == "text" and LAYOUT_ORDERING:
+                            if _plain_is_well_formed(plain):
+                                text = plain
+                            else:
+                                layout = _extract_layout_text(page, pdfium_r)
+                                if layout and not _should_prefer_plain(plain, layout):
+                                    text = layout
+                                else:
+                                    text = plain
+                        else:
+                            text = plain
+                        if cls == "text":
+                            clips = _extract_vector_figure_clips(
+                                page,
+                                i,
+                                plain,
+                                pdfium_r,
+                                base_name,
+                                scale,
+                                quality,
+                                CONFIG.pdf_render_max_edge,
+                            )
+                            if clips:
+                                vector_clips[i] = clips
+                                for ref_path, b64, _y, _cap in clips:
+                                    images[ref_path] = b64
+                        text = _postprocess_pdf_text(text)
+                        if cls == "text" and vector_clips.get(i):
+                            text = _inject_figure_markdown_before_captions(
+                                text, vector_clips[i]
+                            )
+                    finally:
+                        _close_pdfium_resource(page)
+                    texts.append(text)
+                    classes.append(cls)
+
+                texts = _strip_repeating_lines(texts, classes)
+                scanned_indices = [
+                    i for i, c in enumerate(classes) if c == "scanned"
+                ]
 
             # Pass 2: render only the scanned pages (heavy work, rate-limited).
+            # The render runs in child processes (private pdfium per worker), so
+            # pdfium_lock is intentionally NOT held across it.
             if scanned_indices:
                 with parser_worker_limit("pdf_render", CONFIG.pdf_render_max_workers):
                     rendered = _render_scanned_pages(
@@ -1500,16 +1509,17 @@ class PDFParser(BaseParser):
 
             # Pass 3: extract embedded figures from native text pages so the Go
             # App can OCR/caption them (logos/watermarks/tiny images filtered).
-            embedded: dict = {}
             if EXTRACT_EMBEDDED_IMAGES:
-                embedded = _extract_embedded_images(
-                    pdf, classes, pdfium_r, base_name, quality
-                )
+                with pdfium_lock():
+                    embedded = _extract_embedded_images(
+                        pdf, classes, pdfium_r, base_name, quality
+                    )
                 for refs in embedded.values():
                     for ref_path, b64, _y in refs:
                         images[ref_path] = b64
         finally:
-            _close_pdfium_resource(pdf)
+            with pdfium_lock():
+                _close_pdfium_resource(pdf)
 
         # Assemble markdown in reading order, recording each page's rune-offset
         # span so downstream chunking can map a chunk back to its source page.

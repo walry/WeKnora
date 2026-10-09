@@ -54,8 +54,11 @@ class DocReaderConfig:
 
     # Parser
     docx_max_pages: int
+    docx_mp_max_workers: int
     markitdown_max_workers: int
     odl_max_workers: int
+    web_scrape_max_workers: int
+    pdfium_serialize: bool
     odl_hybrid: str
     odl_hybrid_url: str
     odl_hybrid_mode: str
@@ -86,8 +89,15 @@ def load_config() -> DocReaderConfig:
     )
     grpc_port = _get_int(["DOCREADER_GRPC_PORT", "PORT"], 50051)
     docx_max_pages = _get_int(["DOCREADER_DOCX_MAX_PAGES"], 0)
+    docx_mp_max_workers = _get_int(["DOCREADER_DOCX_MAX_WORKERS"], 1)
     markitdown_max_workers = _get_int(["DOCREADER_MARKITDOWN_MAX_WORKERS"], 1)
     odl_max_workers = _get_int(["DOCREADER_ODL_MAX_WORKERS"], 1)
+    web_scrape_max_workers = _get_int(["DOCREADER_WEB_SCRAPE_MAX_WORKERS"], 1)
+    # pdfium (pypdfium2) initialises without a V8 isolate and without any
+    # internal locking, so it is NOT thread-safe. docreader serves parses from a
+    # gRPC thread pool, so by default all in-process pdfium access is serialised
+    # through a process-wide lock. Set false only for a thread-safe pdfium build.
+    pdfium_serialize = _get_bool(["DOCREADER_PDFIUM_SERIALIZE"], True)
     odl_hybrid = _get_str(["DOCREADER_ODL_HYBRID"], "off")
     odl_hybrid_url = _get_str(
         ["DOCREADER_ODL_HYBRID_URL"],
@@ -133,8 +143,11 @@ def load_config() -> DocReaderConfig:
         grpc_max_file_size_mb=grpc_max_file_size_mb,
         grpc_port=grpc_port,
         docx_max_pages=docx_max_pages,
+        docx_mp_max_workers=docx_mp_max_workers,
         markitdown_max_workers=markitdown_max_workers,
         odl_max_workers=odl_max_workers,
+        web_scrape_max_workers=web_scrape_max_workers,
+        pdfium_serialize=pdfium_serialize,
         odl_hybrid=odl_hybrid,
         odl_hybrid_url=odl_hybrid_url,
         odl_hybrid_mode=odl_hybrid_mode,
@@ -161,8 +174,11 @@ def dump_config(mask_secrets: bool = True) -> Dict[str, Any]:
         "DOCREADER_GRPC_MAX_FILE_SIZE_MB": cfg.grpc_max_file_size_mb,
         "DOCREADER_GRPC_PORT": cfg.grpc_port,
         "DOCREADER_DOCX_MAX_PAGES": cfg.docx_max_pages,
+        "DOCREADER_DOCX_MAX_WORKERS": cfg.docx_mp_max_workers,
         "DOCREADER_MARKITDOWN_MAX_WORKERS": cfg.markitdown_max_workers,
         "DOCREADER_ODL_MAX_WORKERS": cfg.odl_max_workers,
+        "DOCREADER_WEB_SCRAPE_MAX_WORKERS": cfg.web_scrape_max_workers,
+        "DOCREADER_PDFIUM_SERIALIZE": cfg.pdfium_serialize,
         "DOCREADER_ODL_HYBRID": cfg.odl_hybrid,
         "DOCREADER_ODL_HYBRID_URL": cfg.odl_hybrid_url,
         "DOCREADER_ODL_HYBRID_MODE": cfg.odl_hybrid_mode,
