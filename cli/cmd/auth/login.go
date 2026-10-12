@@ -32,8 +32,12 @@ type LoginOptions struct {
 	Profile   string // resolved active profile name (honors global --profile)
 	WithToken bool   // --with-token: read api key from stdin instead of prompting password
 	APIKey    string // populated by --with-token from stdin
-	Email     string
-	Password  string
+	Email     string // --email, or prompted when empty
+	Password  string // --password, or prompted when empty
+	// PasswordStdin reads the password from stdin instead of --password, so it
+	// need not appear on the command line (docker-login style). Mutually
+	// exclusive with --password and --with-token.
+	PasswordStdin bool
 	// Remember persists the password to the secrets store so a fully-expired
 	// refresh token can be recovered by an automatic re-login (--remember,
 	// default true). Ignored on the --with-token path.
@@ -76,8 +80,14 @@ func NewCmdLogin(f *cmdutil.Factory, runF func(context.Context, *LoginOptions, *
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate the active profile against its WeKnora server",
-		Long: `Authenticate the active profile by email + password (interactive prompt) or
-pipe an API key with --with-token.
+		Long: `Authenticate the active profile by email + password or pipe an API key
+with --with-token.
+
+Email + password may be entered interactively (prompted when omitted) or
+supplied non-interactively with --email and --password, so the command works in
+environments without a TTY (CI, agents, containers). Supplying only one of the
+two flags prompts for the other. To keep the password out of the process list
+and shell history, pipe it on stdin with --password-stdin instead of --password.
 
 ` + "`auth login`" + ` operates on the active profile (override with the global
 --profile flag). Create the profile first with
@@ -108,15 +118,24 @@ re-authenticates automatically instead of prompting again.`,
 		},
 	}
 	cmd.Flags().BoolVar(&opts.WithToken, "with-token", false, "Read an API key from stdin instead of prompting for password")
+	cmd.Flags().StringVar(&opts.Email, "email", "", "Account email (non-interactive; skips the email prompt)")
+	cmd.Flags().StringVar(&opts.Password, "password", "", "Account password (non-interactive; skips the password prompt). WARNING: visible in the process list / shell history")
+	cmd.Flags().BoolVar(&opts.PasswordStdin, "password-stdin", false, "Read the account password from stdin (keeps it out of the process list / shell history)")
 	cmd.Flags().BoolVar(&opts.Remember, "remember", true, "Remember the password so an expired credential re-authenticates automatically (--remember=false to opt out)")
 	cmdutil.AddFormatFlag(cmd, authLoginFields...)
 	cmdutil.SetAgentHelp(cmd, cmdutil.AgentHelp{
-		UsedFor:  "authenticate the active profile; --with-token reads an API key from stdin (non-interactive)",
-		Examples: []string{`echo "$WEKNORA_API_KEY" | weknora auth login --with-token`},
-		Output:   "envelope.data is {profile, host, mode, user, tenant_id} on success",
+		UsedFor:  "authenticate the active profile; --with-token reads an API key from stdin, --email/--password/--password-stdin log in non-interactively",
+		Examples: []string{
+			`echo "$WEKNORA_API_KEY" | weknora auth login --with-token`,
+			`weknora auth login --email you@example.com --password "$WEKNORA_PASSWORD"`,
+			`echo "$WEKNORA_PASSWORD" | weknora auth login --email you@example.com --password-stdin`,
+		},
+		Output: "envelope.data is {profile, host, mode, user, tenant_id} on success",
 		Warnings: []string{
 			"a profile must exist and be active first (`weknora profile add <n> --host <url> --use`)",
-			"password login is interactive-only (no flags) — agents must use --with-token with the key piped to stdin",
+			"password login works non-interactively via --email + (--password | --password-stdin), or interactively when both are omitted (a TTY is required then)",
+			"--password on the command line is visible in the process list / shell history — prefer `--password-stdin` (pipe it) or `--with-token` on shared hosts",
+			"--password, --password-stdin and --with-token are mutually exclusive",
 			"the password is remembered by default (--remember=false to disable); it is stored in the keyring (or a 0600 file) and reused to re-login automatically once the refresh token expires",
 		},
 	})
@@ -186,6 +205,20 @@ func runLogin(ctx context.Context, opts *LoginOptions, fopts *cmdutil.FormatOpti
 		return err
 	}
 
+	// --with-token (API key) and --email/--password (JWT) are two distinct
+	// credential modes; mixing them is a user error rather than a silent
+	// "API key wins" (which would store a key the user didn't intend to use).
+	if opts.WithToken && (opts.Email != "" || opts.Password != "" || opts.PasswordStdin) {
+		return cmdutil.NewError(cmdutil.CodeInputInvalidArgument,
+			"--with-token cannot be combined with --email/--password/--password-stdin")
+	}
+	// Two sources for the same value; require the caller to pick one so the
+	// password is never silently taken from the wrong place.
+	if opts.Password != "" && opts.PasswordStdin {
+		return cmdutil.NewError(cmdutil.CodeInputInvalidArgument,
+			"--password and --password-stdin are mutually exclusive")
+	}
+
 	if opts.WithToken {
 		key, err := readStdinTrimmed(opts.StdinReader)
 		if err != nil {
@@ -212,9 +245,23 @@ func runLogin(ctx context.Context, opts *LoginOptions, fopts *cmdutil.FormatOpti
 		return persistAPIKey(opts, fopts, f, user)
 	}
 
-	// Interactive: prompt for email + password. svc is always set by now
-	// (loginServiceFor returns non-nil because resolveActiveProfile guarantees
-	// a non-empty host).
+	// --password-stdin: read the password from stdin (docker-login style) so it
+	// never appears in the process list / shell history. Done before the prompt
+	// block so an empty stdin fails fast instead of falling through to a prompt.
+	if opts.PasswordStdin {
+		pw, err := readStdinTrimmed(opts.StdinReader)
+		if err != nil {
+			return cmdutil.Wrapf(cmdutil.CodeLocalFileIO, err, "read password from stdin")
+		}
+		if pw == "" {
+			return cmdutil.NewError(cmdutil.CodeInputMissingFlag, "--password-stdin requires the password piped to stdin")
+		}
+		opts.Password = pw
+	}
+
+	// Interactive: prompt for whatever --email/--password did not supply.
+	// svc is always set by now (loginServiceFor returns non-nil because
+	// resolveActiveProfile guarantees a non-empty host).
 	if opts.Email == "" || opts.Password == "" {
 		p := f.Prompter()
 		if opts.Email == "" {
@@ -231,6 +278,16 @@ func runLogin(ctx context.Context, opts *LoginOptions, fopts *cmdutil.FormatOpti
 			}
 			opts.Password = pw
 		}
+	}
+	// Non-interactive callers (no TTY) reach here with the prompt having
+	// already errored; this guards the flag path against an empty --email
+	// "  " / empty --password that would otherwise be sent to the server.
+	opts.Email = strings.TrimSpace(opts.Email)
+	if opts.Email == "" {
+		return cmdutil.NewError(cmdutil.CodeInputMissingFlag, "email is required; pass --email or run interactively at a terminal")
+	}
+	if opts.Password == "" {
+		return cmdutil.NewError(cmdutil.CodeInputMissingFlag, "password is required; pass --password or run interactively at a terminal")
 	}
 
 	resp, err := svc.Login(ctx, sdk.LoginRequest{Email: opts.Email, Password: opts.Password})

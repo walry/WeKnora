@@ -67,7 +67,13 @@ weknora auth login
 # 2a. No account yet? Create one and log in in a single step
 weknora auth register
 
-# 2b. Or pipe an API key from stdin (for CI / AI agents)
+# 2b. Or log in non-interactively with email + password (CI / no TTY)
+weknora auth login --email you@example.com --password "$WEKNORA_PASSWORD"
+
+# 2b'. ...or pipe the password on stdin to keep it off the command line
+echo "$WEKNORA_PASSWORD" | weknora auth login --email you@example.com --password-stdin
+
+# 2c. Or pipe an API key from stdin (for CI / AI agents)
 echo "sk-..." | weknora auth login --with-token
 
 # 3. List knowledge bases
@@ -155,6 +161,9 @@ weknora profile add prod    --host https://prod.example.com --use     # add + sw
 weknora auth login                                                    # authenticate active (prod)
 weknora auth register                                                 # no account yet? create one + log in
 
+# non-interactive email + password (CI / agents with no TTY)
+weknora auth login --email you@example.com --password "$WEKNORA_PASSWORD"
+
 weknora profile add staging --host https://staging.example.com        # add (stays inactive)
 echo "sk-..." | weknora --profile staging auth login --with-token     # authenticate staging
 
@@ -165,6 +174,16 @@ weknora profile use prod                                              # switch b
 `auth register` creates the account (username defaults to the email local
 part; override with `--username`) and then logs in automatically. It fails
 with `auth.forbidden` when the server is invite-only.
+
+`auth login --email <email> --password <password>` logs in without any prompt,
+for environments that have no TTY (CI, containers, agents). Supplying only one
+of the two flags prompts for the other. Note that a `--password` value passed
+on the command line is visible in the process list and your shell history —
+prefer `--password-stdin` to pipe it in
+(`echo "$WEKNORA_PASSWORD" | weknora auth login --email you@example.com --password-stdin`),
+`--with-token`, or expanding it from an environment variable
+(`--password "$WEKNORA_PASSWORD"`) on shared hosts. `--password`,
+`--password-stdin` and `--with-token` are mutually exclusive.
 
 Credentials are persisted to your OS keyring (Keychain on macOS, libsecret on
 Linux, Wincred on Windows) when available, otherwise to a 0600-mode file

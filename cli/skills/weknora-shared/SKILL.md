@@ -21,13 +21,28 @@ Authentication is a **two-step sequence**. `weknora auth login` operates on the
 weknora profile add prod --host https://kb.example.com --use
 # 2a. API key (agent default — pipe the key on stdin, non-interactive):
 echo "$WEKNORA_API_KEY" | weknora auth login --with-token
-# 2b. OR email+password (interactive prompt only — no flags; not for agents)
+# 2b. OR email+password non-interactively (CI / no TTY):
+weknora auth login --email you@example.com --password "$WEKNORA_PASSWORD"
+#     ...or pipe the password instead (keeps it off the command line):
+echo "$WEKNORA_PASSWORD" | weknora auth login --email you@example.com --password-stdin
+# 2c. OR email+password interactively (prompted; requires a TTY):
 weknora auth login
-# 2c. OR create a brand-new account and log in (interactive; invite-only servers reject with auth.forbidden)
+# 2d. OR create a brand-new account and log in (interactive; invite-only servers reject with auth.forbidden)
 weknora auth register
 
 weknora auth status          # verify: who am I, which tenant
 ```
+
+Non-TTY agents can authenticate with **email + password** too — you are not
+limited to `--with-token`. Preferred order when you have no TTY: an API key via
+`--with-token` (if you hold one), else `--email` + `--password-stdin` (pipe the
+password), else `--email` + `--password`. Only the bare `weknora auth login`
+(a human at a terminal) needs a TTY.
+
+`--password` on the command line is visible in the process list / shell
+history — prefer `--password-stdin` (pipe it), `--with-token`, or expanding it
+from an env var on shared hosts. `--password`, `--password-stdin` and
+`--with-token` are mutually exclusive.
 
 Password logins remember the password by default (`--remember=false` to opt out)
 so an expired credential re-authenticates automatically instead of prompting.
@@ -35,8 +50,9 @@ so an expired credential re-authenticates automatically instead of prompting.
 - `auth register` creates the account (username defaults to the email local
   part — override with `--username`) then logs in. On an invite-only server it
   exits **3** with `error.type = auth.forbidden`; an existing email/username
-  exits **5** (`input.invalid_argument`). Not usable by non-TTY agents
-  (password is prompted) — agents must use `auth login --with-token`.
+  exits **5** (`input.invalid_argument`). Registration prompts interactively
+  (no email/password flags) — agents needing a new account should prefer an API
+  key or have a human run it.
 - Target a *non-active* profile for one command with the global `--profile NAME`
   (e.g. `weknora --profile staging auth refresh`). There is no per-command
   `--name`/`--host` on auth commands.
@@ -174,6 +190,7 @@ that to learn a command without scraping the human help table.
 |---|---|
 | `weknora auth login` before any profile exists | `profile add <n> --host <url> --use` first (§1) |
 | Expecting `auth login --host/--name` flags | Gone — host comes from the profile; use global `--profile` |
+| Thinking password login needs a TTY | Use `--email` + `--password-stdin` (pipe it) or `--email` + `--password`; only bare `auth login` prompts (§1) |
 | `auth register` returns `auth.forbidden` | Server is invite-only — get an invite, or `auth login` if the account exists (§1) |
 | Re-typing the password every session | `auth login`/`auth register` remember it by default; opt out with `--remember=false` (§1) |
 | Repeatedly failing re-auth after a password change | The stale remembered password is dropped on the first rejection — run `auth login` again (§1) |

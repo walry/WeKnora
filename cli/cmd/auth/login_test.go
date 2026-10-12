@@ -217,6 +217,149 @@ func TestLogin_NoHostNoName(t *testing.T) {
 	assert.Nil(t, cmd.Flags().Lookup("host"), "--host flag must be removed")
 	assert.Nil(t, cmd.Flags().Lookup("name"), "--name flag must be removed")
 	assert.NotNil(t, cmd.Flags().Lookup("with-token"), "--with-token must remain")
+	assert.NotNil(t, cmd.Flags().Lookup("email"), "--email must exist for non-interactive login")
+	assert.NotNil(t, cmd.Flags().Lookup("password"), "--password must exist for non-interactive login")
+	assert.NotNil(t, cmd.Flags().Lookup("password-stdin"), "--password-stdin must exist for piped non-interactive login")
+}
+
+// TestRunLogin_PasswordFlags_NonInteractive proves --email/--password fully
+// bypass the prompt: the factory is wired with AgentPrompter, which errors on
+// any interactive call, so a successful login can only have come from flags.
+func TestRunLogin_PasswordFlags_NonInteractive(t *testing.T) {
+	iostreams.SetForTest(t)
+	f, store := newTestFactoryWithConfig(t, prompt.AgentPrompter{})
+	seedActiveProfile(t, "prod", config.Profile{Host: "https://kb.example.com"})
+	svc := &fakeLoginService{resp: &sdk.LoginResponse{
+		Success: true,
+		Token:   "jwt-access",
+		User:    &sdk.AuthUser{ID: "u1", Email: "a@b.c", TenantID: 7},
+	}}
+	// Surrounding whitespace on the email must be trimmed before it is sent.
+	opts := &LoginOptions{Email: "  a@b.c  ", Password: "secret"}
+	require.NoError(t, runLogin(context.Background(), opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatText}, f, svc))
+
+	assert.Equal(t, "a@b.c", svc.got.email, "email must be trimmed")
+	assert.Equal(t, "secret", svc.got.password)
+
+	got, _ := store.Get("prod", "access")
+	assert.Equal(t, "jwt-access", got)
+	cfg, _ := f.Config()
+	assert.Equal(t, "https://kb.example.com", cfg.Profiles["prod"].Host, "host preserved from seeded profile")
+}
+
+// TestRunLogin_FlagMissingPassword_NonInteractive covers supplying --email only
+// with no TTY: the password prompt fails, surfacing a typed missing-flag error
+// rather than a confusing login failure.
+func TestRunLogin_FlagMissingPassword_NonInteractive(t *testing.T) {
+	iostreams.SetForTest(t)
+	f, _ := newTestFactoryWithConfig(t, prompt.AgentPrompter{})
+	seedActiveProfile(t, "prod", config.Profile{Host: "https://kb.example.com"})
+	opts := &LoginOptions{Email: "a@b.c"} // no --password, no TTY to prompt
+	err := runLogin(context.Background(), opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatText}, f, nil)
+	require.Error(t, err)
+	var typed *cmdutil.Error
+	require.ErrorAs(t, err, &typed)
+	assert.Equal(t, cmdutil.CodeInputMissingFlag, typed.Code)
+}
+
+// TestRunLogin_WithTokenConflictsWithPasswordFlags asserts --with-token cannot
+// be combined with --email/--password (two mutually exclusive credential modes).
+func TestRunLogin_WithTokenConflictsWithPasswordFlags(t *testing.T) {
+	iostreams.SetForTest(t)
+	f, _ := newTestFactoryWithConfig(t, prompt.AgentPrompter{})
+	seedActiveProfile(t, "ci", config.Profile{Host: "https://kb.example.com"})
+	opts := &LoginOptions{
+		WithToken:   true,
+		StdinReader: strings.NewReader("sk-1234"),
+		Email:       "a@b.c",
+		Password:    "p",
+	}
+	err := runLogin(context.Background(), opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatText}, f, nil)
+	require.Error(t, err)
+	var typed *cmdutil.Error
+	require.ErrorAs(t, err, &typed)
+	assert.Equal(t, cmdutil.CodeInputInvalidArgument, typed.Code)
+}
+
+// TestRunLogin_PasswordStdin_NonInteractive proves --password-stdin reads the
+// password from stdin (trailing newline trimmed) while --email supplies the
+// rest, with no prompt (AgentPrompter would error on any interactive call).
+func TestRunLogin_PasswordStdin_NonInteractive(t *testing.T) {
+	iostreams.SetForTest(t)
+	f, store := newTestFactoryWithConfig(t, prompt.AgentPrompter{})
+	seedActiveProfile(t, "prod", config.Profile{Host: "https://kb.example.com"})
+	svc := &fakeLoginService{resp: &sdk.LoginResponse{
+		Success: true,
+		Token:   "jwt-access",
+		User:    &sdk.AuthUser{ID: "u1", Email: "a@b.c", TenantID: 7},
+	}}
+	opts := &LoginOptions{
+		Email:         "a@b.c",
+		PasswordStdin: true,
+		StdinReader:   strings.NewReader("  secret\n"),
+	}
+	require.NoError(t, runLogin(context.Background(), opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatText}, f, svc))
+
+	assert.Equal(t, "a@b.c", svc.got.email)
+	assert.Equal(t, "secret", svc.got.password, "stdin password must be trimmed")
+
+	got, _ := store.Get("prod", "access")
+	assert.Equal(t, "jwt-access", got)
+}
+
+// TestRunLogin_PasswordStdin_Empty asserts an empty stdin fails fast with a
+// typed missing-flag error rather than falling through to a prompt.
+func TestRunLogin_PasswordStdin_Empty(t *testing.T) {
+	iostreams.SetForTest(t)
+	f, _ := newTestFactoryWithConfig(t, prompt.AgentPrompter{})
+	seedActiveProfile(t, "prod", config.Profile{Host: "https://kb.example.com"})
+	opts := &LoginOptions{
+		Email:         "a@b.c",
+		PasswordStdin: true,
+		StdinReader:   strings.NewReader(""),
+	}
+	err := runLogin(context.Background(), opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatText}, f, nil)
+	require.Error(t, err)
+	var typed *cmdutil.Error
+	require.ErrorAs(t, err, &typed)
+	assert.Equal(t, cmdutil.CodeInputMissingFlag, typed.Code)
+}
+
+// TestRunLogin_PasswordAndStdinConflict asserts --password and --password-stdin
+// cannot be combined.
+func TestRunLogin_PasswordAndStdinConflict(t *testing.T) {
+	iostreams.SetForTest(t)
+	f, _ := newTestFactoryWithConfig(t, prompt.AgentPrompter{})
+	seedActiveProfile(t, "prod", config.Profile{Host: "https://kb.example.com"})
+	opts := &LoginOptions{
+		Email:         "a@b.c",
+		Password:      "literal",
+		PasswordStdin: true,
+		StdinReader:   strings.NewReader("piped"),
+	}
+	err := runLogin(context.Background(), opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatText}, f, nil)
+	require.Error(t, err)
+	var typed *cmdutil.Error
+	require.ErrorAs(t, err, &typed)
+	assert.Equal(t, cmdutil.CodeInputInvalidArgument, typed.Code)
+}
+
+// TestRunLogin_WithTokenConflictsWithPasswordStdin asserts --with-token cannot
+// be combined with --password-stdin (both consume stdin).
+func TestRunLogin_WithTokenConflictsWithPasswordStdin(t *testing.T) {
+	iostreams.SetForTest(t)
+	f, _ := newTestFactoryWithConfig(t, prompt.AgentPrompter{})
+	seedActiveProfile(t, "ci", config.Profile{Host: "https://kb.example.com"})
+	opts := &LoginOptions{
+		WithToken:     true,
+		PasswordStdin: true,
+		StdinReader:   strings.NewReader("sk-1234"),
+	}
+	err := runLogin(context.Background(), opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatText}, f, nil)
+	require.Error(t, err)
+	var typed *cmdutil.Error
+	require.ErrorAs(t, err, &typed)
+	assert.Equal(t, cmdutil.CodeInputInvalidArgument, typed.Code)
 }
 
 // TestLogin_NoActiveProfile_Errors asserts that with no active profile
