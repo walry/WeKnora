@@ -158,4 +158,8 @@ func clearProfileSecrets(store secrets.Store, c config.Profile, name string) {
 	if c.APIKeyRef != "" {
 		_ = store.Delete(name, "api_key")
 	}
+	// The remembered password has no config ref to gate on, so delete it
+	// unconditionally (a missing entry is a no-op). Otherwise remove would
+	// leave a working auto re-login credential behind.
+	_ = store.Delete(name, "password")
 }

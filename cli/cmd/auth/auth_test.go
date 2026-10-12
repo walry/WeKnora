@@ -106,8 +106,10 @@ func TestPersistJWT_StoresBothTokens(t *testing.T) {
 		Secrets:  func() (secrets.Store, error) { return store, nil },
 	}
 	opts := &LoginOptions{
-		Host:    "https://x",
-		Profile: "p",
+		Host:     "https://x",
+		Profile:  "p",
+		Password: "s3cret",
+		Remember: true,
 	}
 	resp := &sdk.LoginResponse{
 		Token:        "jwt-acc",
@@ -117,8 +119,34 @@ func TestPersistJWT_StoresBothTokens(t *testing.T) {
 	require.NoError(t, persistJWT(opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatJSON}, f, resp))
 	a, _ := store.Get("p", "access")
 	r, _ := store.Get("p", "refresh")
+	pw, _ := store.Get("p", "password")
 	assert.Equal(t, "jwt-acc", a)
 	assert.Equal(t, "jwt-ref", r)
+	assert.Equal(t, "s3cret", pw, "password remembered by default")
+}
+
+func TestPersistJWT_NoRemember_ClearsPassword(t *testing.T) {
+	iostreams.SetForTest(t)
+	testutil.XDGTempDir(t)
+	store := secrets.NewMemStore()
+	// A password left over from an earlier login must be cleared when the user
+	// opts out with --remember=false.
+	require.NoError(t, store.Set("p", "password", "old"))
+	f := &cmdutil.Factory{
+		Config:   func() (*config.Config, error) { return config.Load() },
+		Prompter: func() prompt.Prompter { return prompt.AgentPrompter{} },
+		Secrets:  func() (secrets.Store, error) { return store, nil },
+	}
+	opts := &LoginOptions{
+		Host:     "https://x",
+		Profile:  "p",
+		Password: "s3cret",
+		Remember: false,
+	}
+	resp := &sdk.LoginResponse{Token: "jwt-acc", RefreshToken: "jwt-ref", User: &sdk.AuthUser{Email: "a@b.c"}}
+	require.NoError(t, persistJWT(opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatText}, f, resp))
+	_, perr := store.Get("p", "password")
+	assert.ErrorIs(t, perr, secrets.ErrNotFound, "password cleared when --remember=false")
 }
 
 func TestReadStdinTrimmed(t *testing.T) {

@@ -28,12 +28,16 @@ var authLoginFields = []string{
 // `auth login` authenticates the already-existing active profile, created
 // beforehand with `weknora profile add <name> --host <h> --use`.
 type LoginOptions struct {
-	Host        string // resolved from the active profile's Host in config
-	Profile     string // resolved active profile name (honors global --profile)
-	WithToken   bool   // --with-token: read api key from stdin instead of prompting password
-	APIKey      string // populated by --with-token from stdin
-	Email       string
-	Password    string
+	Host      string // resolved from the active profile's Host in config
+	Profile   string // resolved active profile name (honors global --profile)
+	WithToken bool   // --with-token: read api key from stdin instead of prompting password
+	APIKey    string // populated by --with-token from stdin
+	Email     string
+	Password  string
+	// Remember persists the password to the secrets store so a fully-expired
+	// refresh token can be recovered by an automatic re-login (--remember,
+	// default true). Ignored on the --with-token path.
+	Remember    bool
 	StdinReader io.Reader // override for tests
 }
 
@@ -68,7 +72,7 @@ var defaultAPIKeyValidator apiKeyValidator = func(ctx context.Context, host, api
 // NewCmdLogin builds the `weknora auth login` command. runF is the testable
 // entrypoint (left nil for production; see cli/cmd/auth/login_test.go).
 func NewCmdLogin(f *cmdutil.Factory, runF func(context.Context, *LoginOptions, *cmdutil.FormatOptions, *cmdutil.Factory, LoginService) error) *cobra.Command {
-	opts := &LoginOptions{}
+	opts := &LoginOptions{Remember: true}
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate the active profile against its WeKnora server",
@@ -80,7 +84,11 @@ pipe an API key with --with-token.
 ` + "`weknora profile add <name> --host <h> --use`" + `, then run ` + "`weknora auth login`" + `.
 
 Credentials are persisted to the OS keyring when available; otherwise to a
-0600 file under $XDG_CONFIG_HOME/weknora/secrets.`,
+0600 file under $XDG_CONFIG_HOME/weknora/secrets.
+
+By default the password is remembered too (--remember, opt out with
+--remember=false): when the 7-day refresh token finally expires, the CLI
+re-authenticates automatically instead of prompting again.`,
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			fopts, err := cmdutil.CheckFormatFlag(c)
@@ -100,6 +108,7 @@ Credentials are persisted to the OS keyring when available; otherwise to a
 		},
 	}
 	cmd.Flags().BoolVar(&opts.WithToken, "with-token", false, "Read an API key from stdin instead of prompting for password")
+	cmd.Flags().BoolVar(&opts.Remember, "remember", true, "Remember the password so an expired credential re-authenticates automatically (--remember=false to opt out)")
 	cmdutil.AddFormatFlag(cmd, authLoginFields...)
 	cmdutil.SetAgentHelp(cmd, cmdutil.AgentHelp{
 		UsedFor:  "authenticate the active profile; --with-token reads an API key from stdin (non-interactive)",
@@ -108,6 +117,7 @@ Credentials are persisted to the OS keyring when available; otherwise to a
 		Warnings: []string{
 			"a profile must exist and be active first (`weknora profile add <n> --host <url> --use`)",
 			"password login is interactive-only (no flags) — agents must use --with-token with the key piped to stdin",
+			"the password is remembered by default (--remember=false to disable); it is stored in the keyring (or a 0600 file) and reused to re-login automatically once the refresh token expires",
 		},
 	})
 	return cmd
@@ -253,6 +263,9 @@ func persistAPIKey(opts *LoginOptions, fopts *cmdutil.FormatOptions, f *cmdutil.
 	if err := store.Set(opts.Profile, "api_key", opts.APIKey); err != nil {
 		return cmdutil.Wrapf(cmdutil.CodeLocalKeychainDenied, err, "save api key")
 	}
+	// Switching to an API key: drop any remembered password so it can't be
+	// spent on a later auto re-login against a different credential mode.
+	_ = store.Delete(opts.Profile, "password")
 	// Switching credential mode: this profile is now an API-key profile, so
 	// any leftover JWT refs (from a prior password login) are stale. Set the
 	// api-key ref and clear the token/refresh refs; keep Host + existing
@@ -263,11 +276,20 @@ func persistAPIKey(opts *LoginOptions, fopts *cmdutil.FormatOptions, f *cmdutil.
 		prof.RefreshRef = ""
 		applyUser(prof, user)
 	}
-	return saveProfileRef(opts, fopts, f, mutate, ModeAPIKey, user)
+	return saveProfileRef(opts, fopts, f, mutate, ModeAPIKey, user, "Logged in")
 }
 
 // persistJWT saves access + refresh tokens and writes the profile.
 func persistJWT(opts *LoginOptions, fopts *cmdutil.FormatOptions, f *cmdutil.Factory, resp *sdk.LoginResponse) error {
+	return persistBearer(opts, fopts, f, resp, "Logged in")
+}
+
+// persistBearer saves the access + refresh tokens (and, when opts.Remember, the
+// password for a later automatic re-login) and merges the credential refs into
+// the active profile. verb prefixes the human success line — "Logged in" for
+// `auth login`, "Registered and logged in" for `auth register`; the JSON
+// payload is identical for both flows.
+func persistBearer(opts *LoginOptions, fopts *cmdutil.FormatOptions, f *cmdutil.Factory, resp *sdk.LoginResponse, verb string) error {
 	store, err := f.Secrets()
 	if err != nil {
 		return err
@@ -281,6 +303,17 @@ func persistJWT(opts *LoginOptions, fopts *cmdutil.FormatOptions, f *cmdutil.Fac
 			return cmdutil.Wrapf(cmdutil.CodeLocalKeychainDenied, err, "save refresh token")
 		}
 	}
+	// Remember the password (opt-out via --remember=false) so a fully-expired
+	// refresh token can be recovered by an automatic re-login instead of
+	// prompting again. When not remembering, clear any previously-stored
+	// password so the opt-out takes effect immediately.
+	if opts.Remember && opts.Password != "" {
+		if err := store.Set(opts.Profile, "password", opts.Password); err != nil {
+			return cmdutil.Wrapf(cmdutil.CodeLocalKeychainDenied, err, "save password")
+		}
+	} else {
+		_ = store.Delete(opts.Profile, "password")
+	}
 	// Switching to a JWT profile: set token refs and drop any stale api-key
 	// ref; keep Host + existing User/TenantID (merged in saveProfileRef via applyUser).
 	mutate := func(prof *config.Profile) {
@@ -289,7 +322,7 @@ func persistJWT(opts *LoginOptions, fopts *cmdutil.FormatOptions, f *cmdutil.Fac
 		prof.APIKeyRef = ""
 		applyUser(prof, resp.User)
 	}
-	return saveProfileRef(opts, fopts, f, mutate, ModeBearer, resp.User)
+	return saveProfileRef(opts, fopts, f, mutate, ModeBearer, resp.User, verb)
 }
 
 // applyUser overwrites prof.User / prof.TenantID only when the server actually
@@ -323,7 +356,8 @@ type loginResult struct {
 // the credential refs + any server-returned user, so re-login never clobbers
 // the host or wipes an existing user. cfg.CurrentProfile is left untouched -
 // `auth login` authenticates the already-active profile, it doesn't switch.
-func saveProfileRef(opts *LoginOptions, fopts *cmdutil.FormatOptions, f *cmdutil.Factory, mutate func(*config.Profile), mode string, user *sdk.AuthUser) error {
+// verb prefixes the human success line ("Logged in" / "Registered and logged in").
+func saveProfileRef(opts *LoginOptions, fopts *cmdutil.FormatOptions, f *cmdutil.Factory, mutate func(*config.Profile), mode string, user *sdk.AuthUser, verb string) error {
 	cfg, err := f.Config()
 	if err != nil {
 		return err
@@ -353,7 +387,7 @@ func saveProfileRef(opts *LoginOptions, fopts *cmdutil.FormatOptions, f *cmdutil
 	if user != nil {
 		who = user.Email
 	}
-	fmt.Fprintf(iostreams.IO.Out, "✓ Logged in to %s as %s (profile=%s)\n", opts.Host, who, opts.Profile)
+	fmt.Fprintf(iostreams.IO.Out, "✓ %s to %s as %s (profile=%s)\n", verb, opts.Host, who, opts.Profile)
 	return nil
 }
 

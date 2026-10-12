@@ -19,11 +19,18 @@ import (
 	sdk "github.com/Tencent/WeKnora/client"
 )
 
-// fakeRefreshService scripts a RefreshToken response.
+// fakeRefreshService scripts a RefreshToken response. Login is part of the
+// cmdutil.LoginRefresher surface (the relogin fallback); it is unused unless a
+// test remembers a password, so the zero value fails loudly if called.
 type fakeRefreshService struct {
 	resp   *sdk.RefreshTokenResponse
 	err    error
 	gotTok string
+
+	loginResp     *sdk.LoginResponse
+	loginErr      error
+	loginCalls    int
+	gotLoginEmail string
 }
 
 func (f *fakeRefreshService) RefreshToken(_ context.Context, refreshToken string) (*sdk.RefreshTokenResponse, error) {
@@ -31,10 +38,19 @@ func (f *fakeRefreshService) RefreshToken(_ context.Context, refreshToken string
 	return f.resp, f.err
 }
 
+func (f *fakeRefreshService) Login(_ context.Context, req sdk.LoginRequest) (*sdk.LoginResponse, error) {
+	f.loginCalls++
+	f.gotLoginEmail = req.Email
+	if f.loginResp == nil && f.loginErr == nil {
+		return nil, errors.New("Login must not be called: no password is remembered in these tests")
+	}
+	return f.loginResp, f.loginErr
+}
+
 // stubSvc returns a closure conforming to the refresherFor signature; it
 // ignores host since the fake doesn't talk to the network.
-func stubSvc(s cmdutil.Refresher) func(string) cmdutil.Refresher {
-	return func(string) cmdutil.Refresher { return s }
+func stubSvc(s cmdutil.LoginRefresher) func(string) cmdutil.LoginRefresher {
+	return func(string) cmdutil.LoginRefresher { return s }
 }
 
 func newRefreshFactory(t *testing.T, cfg *config.Config, store *secrets.MemStore) *cmdutil.Factory {
@@ -207,6 +223,32 @@ func TestRefresh_TransportError(t *testing.T) {
 	// CodeAuthBadCredential mapping pattern; here we keep network errors
 	// distinct since auth/refresh treats them as retryable).
 	assert.Equal(t, cmdutil.CodeNetworkError, typed.Code)
+}
+
+func TestRefresh_FallsBackToRelogin(t *testing.T) {
+	iostreams.SetForTest(t)
+	store := secrets.NewMemStore()
+	require.NoError(t, store.Set("prod", "refresh", "stale-refresh"))
+	require.NoError(t, store.Set("prod", "password", "s3cret"))
+	cfg := &config.Config{
+		CurrentProfile: "prod",
+		Profiles: map[string]config.Profile{
+			"prod": {Host: "https://kb", TokenRef: "mem://prod/access", RefreshRef: "mem://prod/refresh", User: "alice@example.com"},
+		},
+	}
+	f := newRefreshFactory(t, cfg, store)
+	svc := &fakeRefreshService{
+		resp:      &sdk.RefreshTokenResponse{Success: false, Message: "refresh token expired"},
+		loginResp: &sdk.LoginResponse{Success: true, Token: "relogin-access", RefreshToken: "relogin-refresh"},
+	}
+	require.NoError(t, runRefresh(context.Background(), &RefreshOptions{}, &cmdutil.FormatOptions{Mode: cmdutil.FormatText}, f, stubSvc(svc)))
+
+	assert.Equal(t, 1, svc.loginCalls, "expired refresh + remembered password must fall back to login")
+	assert.Equal(t, "alice@example.com", svc.gotLoginEmail, "relogin must use the profile's persisted email")
+	gotAccess, _ := store.Get("prod", "access")
+	gotRefresh, _ := store.Get("prod", "refresh")
+	assert.Equal(t, "relogin-access", gotAccess)
+	assert.Equal(t, "relogin-refresh", gotRefresh)
 }
 
 func TestRefresh_JSONOutput(t *testing.T) {

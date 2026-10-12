@@ -64,6 +64,9 @@ weknora profile add prod --host https://kb.example.com --use
 # 2. Authenticate the active profile (interactive password prompt)
 weknora auth login
 
+# 2a. No account yet? Create one and log in in a single step
+weknora auth register
+
 # 2b. Or pipe an API key from stdin (for CI / AI agents)
 echo "sk-..." | weknora auth login --with-token
 
@@ -150,6 +153,7 @@ flag). Create a profile first, then authenticate it:
 ```bash
 weknora profile add prod    --host https://prod.example.com --use     # add + switch
 weknora auth login                                                    # authenticate active (prod)
+weknora auth register                                                 # no account yet? create one + log in
 
 weknora profile add staging --host https://staging.example.com        # add (stays inactive)
 echo "sk-..." | weknora --profile staging auth login --with-token     # authenticate staging
@@ -158,10 +162,25 @@ weknora auth list
 weknora profile use prod                                              # switch back
 ```
 
+`auth register` creates the account (username defaults to the email local
+part; override with `--username`) and then logs in automatically. It fails
+with `auth.forbidden` when the server is invite-only.
+
 Credentials are persisted to your OS keyring (Keychain on macOS, libsecret on
 Linux, Wincred on Windows) when available, otherwise to a 0600-mode file
 under `$XDG_CONFIG_HOME/weknora/secrets/`. The active profile lives in
 `~/.config/weknora/config.yaml`.
+
+### Remembered password & automatic re-login
+
+By default `auth login` / `auth register` also remember the password
+(`--remember=false` to opt out). The CLI already renews the 24-hour access
+token silently via the 7-day refresh token; when that refresh token finally
+expires (7 days of no use), the remembered password is spent on a full
+re-login automatically — so you enter the password once and never again. The
+password lives in the same keyring/file store as the tokens and is deleted by
+`auth logout` / `profile remove`. If the server rejects the stored password
+(e.g. it was changed), the CLI drops it and asks you to log in again.
 
 To remove a profile's stored credentials:
 
@@ -279,7 +298,7 @@ operations that intentionally go through `weknora api`:
   /api/v1/knowledge-chat/<session-id> --input -`.
 - **Per-request `session ask --agent` overrides** — same shape via
   `weknora api POST /api/v1/agent-chat/<session-id> --input -`.
-- **Operations without a CLI verb** — register / change-password /
+- **Operations without a CLI verb** — change-password /
   OIDC flows, organization / sharing endpoints, tenant management.
 
 `weknora api --help` documents the raw passthrough. Run

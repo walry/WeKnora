@@ -569,7 +569,7 @@ Rationale: earlier drafts produced three categories of schema errors — fields 
 
 ## CRUD command flag conventions
 
-CRUD commands follow the **hard-required-flags** pattern: every required input is a flag or positional, and a missing one yields an immediate `input.invalid_argument` exit. The contrast is **TTY-prompts-fill**, where missing input opens an interactive prompt; that pattern is reserved for `auth login` (the one command where a human must be at the terminal).
+CRUD commands follow the **hard-required-flags** pattern: every required input is a flag or positional, and a missing one yields an immediate `input.invalid_argument` exit. The contrast is **TTY-prompts-fill**, where missing input opens an interactive prompt; that pattern is reserved for the interactive credential commands `auth login` and `auth register` (where a human must be at the terminal to type a password).
 
 Required-input idioms in this codebase:
 

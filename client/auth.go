@@ -95,8 +95,9 @@ type CurrentUserResponse struct {
 // HTTP middleware (e.g. the CLI's 401-retry transport) can classify
 // requests without re-hardcoding the literals.
 const (
-	PathAuthLogin   = "/api/v1/auth/login"
-	PathAuthRefresh = "/api/v1/auth/refresh"
+	PathAuthLogin    = "/api/v1/auth/login"
+	PathAuthRefresh  = "/api/v1/auth/refresh"
+	PathAuthRegister = "/api/v1/auth/register"
 )
 
 // RefreshTokenResponse is the body of POST /api/v1/auth/refresh.
@@ -105,6 +106,30 @@ type RefreshTokenResponse struct {
 	Message      string `json:"message,omitempty"`
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+}
+
+// RegisterRequest is the body for POST /api/v1/auth/register.
+//
+// Mirrors the server's types.RegisterRequest (username 2-50 chars,
+// email, password min 6). The SDK cannot import internal/types, so the
+// shape is duplicated here like AuthUser / AuthTenant.
+type RegisterRequest struct {
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// RegisterResponse is the body returned by POST /api/v1/auth/register.
+//
+// Unlike LoginResponse it carries NO tokens: the public register endpoint
+// responds 201 with just the created principal, so a caller wanting a
+// session must follow up with Login. Tenant is optional (the handler does
+// not always populate it).
+type RegisterResponse struct {
+	Success bool        `json:"success"`
+	Message string      `json:"message,omitempty"`
+	User    *AuthUser   `json:"user,omitempty"`
+	Tenant  *AuthTenant `json:"tenant,omitempty"`
 }
 
 // Login authenticates with email + password and returns the JWT access token,
@@ -123,6 +148,26 @@ func (c *Client) Login(ctx context.Context, req LoginRequest) (*LoginResponse, e
 	// 后端已将 tenant 字段重命名为 active_tenant；为照顾仍读取旧字段名的下游
 	// 调用者，在反序列化后镜像一份到 Tenant 上。两者总是指向同一指针。
 	out.Tenant = out.ActiveTenant
+	return &out, nil
+}
+
+// Register creates a new user account with username + email + password.
+// Maps to POST /api/v1/auth/register.
+//
+// The endpoint returns 201 without tokens, so callers wanting an immediate
+// session must call Login afterwards (this is what `weknora auth register`
+// does). Returns the server's error verbatim for non-2xx responses — e.g.
+// 403 when registration is invite-only, 400 when the email/username is
+// already taken.
+func (c *Client) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {
+	resp, err := c.doRequest(ctx, http.MethodPost, PathAuthRegister, req, nil)
+	if err != nil {
+		return nil, fmt.Errorf("register request: %w", err)
+	}
+	var out RegisterResponse
+	if err := parseResponse(resp, &out); err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 

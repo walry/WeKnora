@@ -10,6 +10,17 @@ of the WeKnora server / frontend release cadence.
 CLI history before v0.3 is recorded in the project root
 [CHANGELOG.md](../CHANGELOG.md) under the release that introduced the CLI.
 
+## [Unreleased]
+
+#### Added
+- `weknora auth register` — create a new account on the active profile's server (email + password prompted; username defaults to the email local part, override with `--username`) and log in automatically. Fails with `auth.forbidden` when the server is invite-only.
+- `--remember` on `auth login` / `auth register` (default **on**; disable with `--remember=false`): the password is stored alongside the tokens so the CLI can re-authenticate once the 7-day refresh token expires — enter the password once and never again.
+- Automatic re-login: when the refresh token is missing or rejected and a password was remembered, the CLI transparently logs in with it (also for the explicit `auth refresh` command) instead of failing with `auth.token_expired`.
+
+#### Changed
+- `auth logout` / `profile remove` now also delete the remembered-password secret slot.
+- The SDK gained `Client.Register` (`client/auth.go`) for `POST /api/v1/auth/register`.
+
 ## [0.9.0] - 2026-06-10
 
 ### v0.9 — auth/profile model harmonization + flag cleanup

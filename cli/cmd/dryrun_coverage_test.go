@@ -49,6 +49,9 @@ var dryRunExpectation = map[string]bool{
 	// whole purpose is the server round-trip, which a side-effect-free dry-run
 	// cannot exercise — so previewing it would be misleading. Exempt by design.
 	"auth login": false,
+	// auth register likewise creates an account + logs in (server round-trips +
+	// credential storage); a side-effect-free preview is meaningless.
+	"auth register": false,
 	// long-running stdio server, not a one-shot command.
 	"mcp serve": false,
 }

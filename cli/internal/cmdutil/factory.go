@@ -172,7 +172,7 @@ func buildClient(f *Factory) (*sdk.Client, error) {
 	// them propagates as auth.unauthenticated for the caller to handle.
 	if prof.TokenRef != "" && prof.RefreshRef != "" {
 		refreshFn := func(rctx context.Context) (string, error) {
-			return refreshAccessToken(rctx, store, prof.Host, profileName)
+			return refreshOrRelogin(rctx, store, prof.Host, profileName, prof.User)
 		}
 		opts = append(opts, sdk.WithTransport(
 			NewAuthRetryTransport(http.DefaultTransport, accessToken, refreshFn),
@@ -295,13 +295,16 @@ func LoadSecret(store secrets.Store, profile, key string) (string, error) {
 	return v, nil
 }
 
-// refreshAccessToken is the closure target injected into AuthRetryTransport's
+// refreshOrRelogin is the closure target injected into AuthRetryTransport's
 // refreshFn. A fresh SDK Client is built here rather than reusing the one
 // being constructed - that one is itself wrapped by the transport, which
-// would recurse on refresh. The refresh endpoint is unauthenticated apart
-// from the refresh token in the body, so no credential options are needed.
-func refreshAccessToken(ctx context.Context, store secrets.Store, host, profileName string) (string, error) {
-	return RefreshAndPersist(ctx, store, sdk.NewClient(host), profileName)
+// would recurse on refresh. The refresh / login endpoints are unauthenticated
+// apart from the credential carried in the request body, so no credential
+// options are needed. email (the profile's persisted User) is passed through
+// so a fully-expired refresh token can fall back to a password re-login when
+// the CLI remembered the password.
+func refreshOrRelogin(ctx context.Context, store secrets.Store, host, profileName, email string) (string, error) {
+	return RefreshOrRelogin(ctx, store, sdk.NewClient(host), profileName, email)
 }
 
 // ActiveProfile returns the resolved profile name for this invocation:

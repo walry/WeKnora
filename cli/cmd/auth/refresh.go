@@ -42,6 +42,10 @@ func NewCmdRefresh(f *cmdutil.Factory) *cobra.Command {
 exchanges it for a new access + refresh token pair via POST /api/v1/auth/refresh.
 Both new tokens replace the existing entries in the OS keyring.
 
+If the refresh token has itself expired but a password was remembered
+(` + "`auth login --remember`" + `), the CLI falls back to a full re-login so the
+session is renewed without prompting.
+
 API-key profiles are rejected with input.invalid_argument - they have no
 refresh semantic. Rotate the key in the server UI instead.`,
 		Example: `  weknora auth refresh                      # refresh the active profile
@@ -104,13 +108,13 @@ refresh semantic. Rotate the key in the server UI instead.`,
 }
 
 // defaultRefresher constructs a fresh, unauthenticated SDK client targeting
-// host - the /auth/refresh endpoint reads the refresh token from the body,
-// so no bearer / api-key header is needed.
-func defaultRefresher(host string) cmdutil.Refresher {
+// host - the /auth/refresh and /auth/login endpoints read the credential from
+// the body, so no bearer / api-key header is needed.
+func defaultRefresher(host string) cmdutil.LoginRefresher {
 	return sdk.NewClient(host)
 }
 
-func runRefresh(ctx context.Context, opts *RefreshOptions, fopts *cmdutil.FormatOptions, f *cmdutil.Factory, refresherFor func(host string) cmdutil.Refresher) error {
+func runRefresh(ctx context.Context, opts *RefreshOptions, fopts *cmdutil.FormatOptions, f *cmdutil.Factory, refresherFor func(host string) cmdutil.LoginRefresher) error {
 	cfg, err := f.Config()
 	if err != nil {
 		return err
@@ -145,7 +149,7 @@ func runRefresh(ctx context.Context, opts *RefreshOptions, fopts *cmdutil.Format
 	if err != nil {
 		return err
 	}
-	if _, err := cmdutil.RefreshAndPersist(ctx, store, refresherFor(c.Host), name); err != nil {
+	if _, err := cmdutil.RefreshOrRelogin(ctx, store, refresherFor(c.Host), name, c.User); err != nil {
 		return err
 	}
 

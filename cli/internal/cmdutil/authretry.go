@@ -116,12 +116,13 @@ func (t *AuthRetryTransport) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 // isAuthEndpoint reports whether path is one of the auth endpoints where
-// 401 retry would either recurse (refresh) or duplicate work (login). The
-// path constants are sourced from the SDK so the CLI and SDK can never
+// 401 retry would either recurse (refresh) or duplicate work (login/register).
+// The path constants are sourced from the SDK so the CLI and SDK can never
 // drift on the canonical paths.
 func isAuthEndpoint(path string) bool {
 	return strings.HasPrefix(path, sdk.PathAuthLogin) ||
-		strings.HasPrefix(path, sdk.PathAuthRefresh)
+		strings.HasPrefix(path, sdk.PathAuthRefresh) ||
+		strings.HasPrefix(path, sdk.PathAuthRegister)
 }
 
 // drainAndClose consumes the response body so the underlying connection

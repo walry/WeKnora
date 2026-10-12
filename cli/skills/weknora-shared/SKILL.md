@@ -23,10 +23,20 @@ weknora profile add prod --host https://kb.example.com --use
 echo "$WEKNORA_API_KEY" | weknora auth login --with-token
 # 2b. OR email+password (interactive prompt only — no flags; not for agents)
 weknora auth login
+# 2c. OR create a brand-new account and log in (interactive; invite-only servers reject with auth.forbidden)
+weknora auth register
 
 weknora auth status          # verify: who am I, which tenant
 ```
 
+Password logins remember the password by default (`--remember=false` to opt out)
+so an expired credential re-authenticates automatically instead of prompting.
+
+- `auth register` creates the account (username defaults to the email local
+  part — override with `--username`) then logs in. On an invite-only server it
+  exits **3** with `error.type = auth.forbidden`; an existing email/username
+  exits **5** (`input.invalid_argument`). Not usable by non-TTY agents
+  (password is prompted) — agents must use `auth login --with-token`.
 - Target a *non-active* profile for one command with the global `--profile NAME`
   (e.g. `weknora --profile staging auth refresh`). There is no per-command
   `--name`/`--host` on auth commands.
@@ -164,6 +174,9 @@ that to learn a command without scraping the human help table.
 |---|---|
 | `weknora auth login` before any profile exists | `profile add <n> --host <url> --use` first (§1) |
 | Expecting `auth login --host/--name` flags | Gone — host comes from the profile; use global `--profile` |
+| `auth register` returns `auth.forbidden` | Server is invite-only — get an invite, or `auth login` if the account exists (§1) |
+| Re-typing the password every session | `auth login`/`auth register` remember it by default; opt out with `--remember=false` (§1) |
+| Repeatedly failing re-auth after a password change | The stale remembered password is dropped on the first rejection — run `auth login` again (§1) |
 | Auto-adding `-y` to clear an exit-10 | Never; get user approval first (§5) |
 | `weknora chat "..."` prints "garbled" stream | NDJSON by default; use `--format text` for a transcript |
 | `search chunks "q"` → exit 1 `local.kb_id_required` | Pass `--kb <name-or-id>`, set `WEKNORA_KB_ID`, or `weknora link` the dir |

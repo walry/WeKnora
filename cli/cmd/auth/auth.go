@@ -42,6 +42,7 @@ func NewCmdAuth(f *cmdutil.Factory) *cobra.Command {
 		Short: "Manage authentication credentials and profiles",
 	}
 	cmd.AddCommand(NewCmdLogin(f, nil))
+	cmd.AddCommand(NewCmdRegister(f, nil))
 	cmd.AddCommand(NewCmdLogout(f))
 	cmd.AddCommand(NewCmdList(f))
 	cmd.AddCommand(NewCmdRefresh(f))
