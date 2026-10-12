@@ -227,13 +227,28 @@ services:
       dockerfile: docker/Dockerfile.docreader
       args:
         - APT_MIRROR=${APT_MIRROR:-}
-    container_name: WeKnora-docreader
+    # Deliberately NO `container_name:` — Compose refuses to scale a service
+    # that pins one. Use `docker compose exec docreader ...` to enter a replica
+    # (it picks one) or `docker compose ps docreader` to list them.
+    #
+    # Horizontal scaling (`DOCREADER_REPLICAS`, default 1): docreader is a
+    # stateless parser, and the Go app already load-balances across replicas
+    # (dial target `dns:///<addr>` with round_robin — see docreader/client).
+    # Each replica owns its own pdfium instance, which is the ONLY way to scale
+    # pure-PDF throughput: a single container serialises every pdfium call
+    # through DOCREADER_PDFIUM_SERIALIZE regardless of DOCREADER_GRPC_MAX_WORKERS.
+    # Size so `replicas * PDF_RENDER_MAX_WORKERS * PDF_RENDER_PARALLELISM` stays
+    # around the host CPU count, and watch RAM (each replica keeps its in-flight
+    # documents, incl. rendered page images, resident).
+    deploy:
+      replicas: ${DOCREADER_REPLICAS:-1}
     # docreader gRPC ships without auth/TLS and is only consumed by the app
     # container over the WeKnora-network (DOCREADER_ADDR defaults to
     # docreader:50051), so we don't publish 50051 to the host. `expose` keeps
     # the port reachable inside the compose network for documentation only.
     # If you need to call docreader from outside the host (e.g. for debugging),
-    # add a `ports:` entry locally, preferably bound to 127.0.0.1.
+    # add a `ports:` entry locally, preferably bound to 127.0.0.1 — but note a
+    # published host port collides once replicas > 1.
     expose:
       - "50051"
     volumes:

@@ -241,7 +241,12 @@ services:
       context: .
       dockerfile: docker/Dockerfile.docreader
     image: wechatopenai/weknora-docreader:${WEKNORA_VERSION:-latest}
-    container_name: WeKnora-docreader-dev
+    # No fixed container_name so the service can be scaled (see DOCREADER_REPLICAS
+    # in .env.example); use `docker compose exec docreader sh` to enter a replica.
+    # NOTE: the debug port below binds a fixed host port, which collides once
+    # replicas > 1 — drop the `ports:` block before scaling in dev.
+    deploy:
+      replicas: ${DOCREADER_REPLICAS:-1}
     ports:
       - "${DOCREADER_PORT:-50051}:50051"
     volumes:

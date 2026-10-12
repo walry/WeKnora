@@ -225,13 +225,43 @@ healthcheck:
 可以通过以下命令检查服务状态：
 
 ```bash
-docker ps | grep docreader
-docker logs WeKnora-docreader
+docker compose ps docreader          # 列出全部副本
+docker compose logs docreader        # 聚合所有副本日志
+docker compose exec docreader sh     # 进入某个副本（会任选一个）
 ```
+
+## 水平扩容（多副本）
+
+docreader 是无状态解析器，`docker compose` 部署可直接水平扩容。各副本持有独立的
+pdfium 实例——这是**纯 PDF 批量吞吐的唯一扩容手段**：单容器内所有 pdfium 调用都会被
+`DOCREADER_PDFIUM_SERIALIZE` 串行化，调大 `DOCREADER_GRPC_MAX_WORKERS` 无效。
+
+```bash
+# 方式一：在 .env 设置副本数后启动
+DOCREADER_REPLICAS=4 docker compose up -d
+
+# 方式二：直接 scale（与方式一选其一，不要同时使用）
+docker compose up -d --scale docreader=4
+```
+
+Go App 端无需改动：客户端以 `dns:///<addr>` + `round_robin` 拨号，Docker 内置 DNS 会把
+服务名 `docreader` 解析为全部副本 IP，自动在副本间负载均衡。
+
+扩容时注意：
+
+- **同步调小每副本并行度**，令
+  `replicas * DOCREADER_PDF_RENDER_MAX_WORKERS * DOCREADER_PDF_RENDER_PARALLELISM <= CPU 核数`，
+  否则嵌套进程池会超订反而更慢。
+- **内存**：每个副本会常驻其在途文档（含渲染出的页图），副本数受 RAM 限制。
+- **不要发布宿主端口**：`ports:` 映射在副本数 > 1 时会冲突（docreader 默认只用 `expose`，已在 WeKnora-network 内可达）。
+- 单机多副本只提升核心利用率、不增加算力，也不提供跨机高可用；好处之一是单个副本若因 pdfium 崩溃（SIGABRT）被拉起时，其余副本继续服务。
+
+实测参考（8 核单机，模拟副本）：文本 PDF 4 副本 3.4x / 8 副本 4.6x；扫描件 8 副本且每副本
+`DOCREADER_PDF_RENDER_PARALLELISM=1` 达 5.1x。
 
 ## 更多信息
 
 - 服务端口：50051（gRPC）
-- 容器名称：WeKnora-docreader
+- 容器名称：不固定（为支持扩容已移除 `container_name`），用 `docker compose ps docreader` 查看
 - 网络：WeKnora-network
 - 重启策略：unless-stopped
