@@ -128,22 +128,37 @@ type JoinRequestResponse struct {
 
 // SharedKnowledgeBaseInfo represents a shared knowledge base
 type SharedKnowledgeBaseInfo struct {
-	ShareID        string    `json:"share_id"`
-	OrganizationID string    `json:"organization_id"`
-	OrgName        string    `json:"org_name"`
-	Permission     string    `json:"permission"`
-	SourceTenantID uint64    `json:"source_tenant_id"`
-	SharedAt       time.Time `json:"shared_at"`
+	// KnowledgeBase is the shared KB itself. The space-scoped endpoint
+	// (/organizations/{id}/shared-knowledge-bases) embeds it, which is what
+	// makes the share addressable as a --kb value; the flat
+	// /shared-knowledge-bases endpoint returns share metadata only, so this
+	// is nil there.
+	KnowledgeBase  *KnowledgeBase `json:"knowledge_base,omitempty"`
+	ShareID        string         `json:"share_id"`
+	OrganizationID string         `json:"organization_id"`
+	OrgName        string         `json:"org_name"`
+	Permission     string         `json:"permission"`
+	SourceTenantID uint64         `json:"source_tenant_id"`
+	SharedAt       time.Time      `json:"shared_at"`
+	// IsMine marks a share created by the caller's own tenant (space view
+	// only — the flat endpoint omits own shares entirely).
+	IsMine bool `json:"is_mine,omitempty"`
 }
 
 // SharedAgentInfo represents a shared agent
 type SharedAgentInfo struct {
+	// Agent is the shared agent itself. Populated by the space-scoped
+	// endpoint (/organizations/{id}/shared-agents); nil on the flat list.
+	Agent          *Agent    `json:"agent,omitempty"`
 	ShareID        string    `json:"share_id"`
 	OrganizationID string    `json:"organization_id"`
 	OrgName        string    `json:"org_name"`
 	Permission     string    `json:"permission"`
 	SourceTenantID uint64    `json:"source_tenant_id"`
 	SharedAt       time.Time `json:"shared_at"`
+	// IsMine marks a share created by the caller's own tenant (space view
+	// only — the flat endpoint omits own shares entirely).
+	IsMine bool `json:"is_mine,omitempty"`
 }
 
 // UserInfo represents user information for API responses
@@ -619,6 +634,52 @@ func (c *Client) ListSharedKnowledgeBases(ctx context.Context) ([]SharedKnowledg
 	var result struct {
 		Success bool                      `json:"success"`
 		Data    []SharedKnowledgeBaseInfo `json:"data"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	return result.Data, nil
+}
+
+// ListOrganizationSharedKnowledgeBases lists every knowledge base visible in
+// one organization (space), including the ones the caller's own tenant shared
+// there — the flat ListSharedKnowledgeBases deliberately drops own shares.
+//
+// Each row embeds the KnowledgeBase, so row.KnowledgeBase.ID is directly
+// usable as a --kb argument. The caller's tenant must be a member of the org;
+// non-members get a 403 from the server.
+func (c *Client) ListOrganizationSharedKnowledgeBases(
+	ctx context.Context, orgID string,
+) ([]SharedKnowledgeBaseInfo, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet,
+		fmt.Sprintf("/api/v1/organizations/%s/shared-knowledge-bases", url.PathEscape(orgID)), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Success bool                      `json:"success"`
+		Data    []SharedKnowledgeBaseInfo `json:"data"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	return result.Data, nil
+}
+
+// ListOrganizationSharedAgents lists every agent visible in one organization
+// (space), including own shares. Each row embeds the Agent, so
+// row.Agent.ID is directly usable as a --agent argument for `session ask`.
+func (c *Client) ListOrganizationSharedAgents(
+	ctx context.Context, orgID string,
+) ([]SharedAgentInfo, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet,
+		fmt.Sprintf("/api/v1/organizations/%s/shared-agents", url.PathEscape(orgID)), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Success bool              `json:"success"`
+		Data    []SharedAgentInfo `json:"data"`
 	}
 	if err := parseResponse(resp, &result); err != nil {
 		return nil, err

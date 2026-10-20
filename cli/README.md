@@ -146,10 +146,14 @@ For AI agents (any MCP-capable host) integrating WeKnora:
 under [`skills/`](skills/) that teach an agent to drive WeKnora without trial and error:
 
 - [`weknora-shared`](skills/weknora-shared/SKILL.md) — **read first**: auth/profile
-  sequence, `--kb` resolution, the JSON-envelope + exit-code contract, the exit-10
-  protocol, `--dry-run`, and CLI-vs-MCP selection.
-- [`weknora-rag-search`](skills/weknora-rag-search/SKILL.md) — when to use `chat`
-  vs `session ask` vs `search chunks`, plus retrieval gotchas.
+  sequence, `--kb` resolution (including why shared-space KBs are UUID-only), the
+  JSON-envelope + exit-code contract, the exit-10 protocol, `--dry-run`, and
+  CLI-vs-MCP selection.
+- [`weknora-rag-search`](skills/weknora-rag-search/SKILL.md) — the shared-space-first
+  answer protocol (UVDoc space before the caller's own workspace), when to use
+  `chat` vs `session ask` vs `search chunks`, plus retrieval gotchas and
+  [`references/shared-space.md`](skills/weknora-rag-search/references/shared-space.md)
+  for space discovery and failure modes.
 
 Install them with the CLI (the skills are embedded in the binary, no checkout
 needed):

@@ -1,6 +1,6 @@
 ---
 name: weknora-shared
-description: Use when driving a WeKnora RAG server through the `weknora` CLI as an agent — authenticating, managing knowledge bases / documents / sessions / agents, running search or chat, or interpreting the CLI's JSON envelopes and exit codes. Read this before any other weknora-* skill.
+description: Use when driving a WeKnora RAG server through the `weknora` CLI as an agent — authenticating, finding knowledge bases and agents (including ones shared into a collaboration space), managing knowledge bases / documents / sessions / agents, running search or chat, or interpreting the CLI's JSON envelopes and exit codes. Read this before any other weknora-* skill.
 metadata:
   tested_against: v0.10
 ---
@@ -46,11 +46,29 @@ weknora auth status          # verify: who am I, which tenant
 
 ## 2. Selecting a knowledge base (`--kb`)
 
-`--kb` accepts a **name or a UUID** (resolved server-side). Resolution order:
+`--kb` accepts a **name or a UUID**: a UUID passes straight through, a name is
+matched against the caller's *own workspace* KB list. Resolution order:
 `--kb` flag → `WEKNORA_KB_ID` env → directory link (`weknora link --kb X` binds
 the cwd) → error. Read/create commands that operate "inside a project" inherit
 the link; **`search *` and destructive `--all` operations always require an
 explicit `--kb`** (so an agent never silently hits the wrong corpus).
+
+**Shared-space KBs are UUID-only.** A KB or agent that another workspace shared
+into an organization (a "space") keeps living in its owner workspace, so the
+name lookup never reaches it: `--kb "<space KB name>"` exits 1
+`local.kb_not_found` even though the KB is readable. Enumerate the space and
+take the UUID:
+
+```bash
+weknora kb list --space UVDoc --format json     # KBs visible in one space
+weknora kb list --shared --format json          # every space this workspace joins
+weknora agent list --space UVDoc --format json  # agents shared in that space
+```
+
+A space member with `viewer` permission can then `chat` / `search chunks` /
+`session ask` against those UUIDs — no extra flag, no special header. The
+`weknora-rag-search` skill builds a mandatory ordering on top of this (space
+first, own workspace only as an evidenced fallback).
 
 **A KB must have an embedding model bound to be searchable.** A freshly created
 KB is `retrieval_ready:false` — uploaded docs stay unindexed and `search`/`chat`
@@ -186,6 +204,12 @@ link/unlink  bind cwd to a KB        mcp serve  expose weknora as MCP tools
 KB Q&A with an LLM; `session ask --agent <id>` = invoke a *custom agent*;
 `search chunks` = raw hybrid retrieval (no LLM).
 
+**Space views:** `kb list --space <name-or-uuid>` and `agent list --space
+<name-or-uuid>` list what a collaboration space exposes (own shares included,
+marked `source":"mine"`); `kb list --shared` covers every space the workspace
+belongs to. These are the only ways to obtain a shared KB / agent UUID, which is
+what `--kb` and `--agent` need.
+
 ## 9. CLI vs MCP
 
 For your own scripted control, use the CLI (richer: dry-run, exit-10, all verbs).
@@ -193,6 +217,11 @@ For an IDE/host agent that speaks MCP, `weknora mcp serve` exposes a curated
 read+chat tool set: `kb_list`, `kb_view`, `doc_list`, `doc_view`, `doc_download`,
 `search_chunks`, `chunk_list`, `agent_list`, `chat`, `session_ask`. MCP tools
 take raw ids (no name resolution); resolve names via `kb_list` first.
+
+The MCP tool set has no space-scoped listing, so it cannot itself discover a
+shared KB or a shared agent. Resolve the UUID with the CLI
+(`weknora kb list --space <space>`, `weknora agent list --space <space>`) and
+pass that id to `search_chunks`, `chat`, or `session_ask`.
 
 ## 10. Agent self-help
 
@@ -209,3 +238,6 @@ that to learn a command without scraping the human help table.
 | Auto-adding `-y` to clear an exit-10 | Never; get user approval first (§5) |
 | Need the raw `chat` event stream | pass `--format ndjson`; use `--format text` for a live projected transcript |
 | `search chunks "q"` → exit 1 `local.kb_id_required` | Pass `--kb <name-or-id>`, set `WEKNORA_KB_ID`, or `weknora link` the dir |
+| `--kb "<name of a KB in a shared space>"` → exit 1 `local.kb_not_found`, then concluding "the space is empty" | Names never resolve across workspaces. Take the UUID from `kb list --space <space>` (§2) |
+| Answering a general question from the workspace's own KBs without checking the space | The shared space is the primary corpus; `kb list --space UVDoc` first, and say so when you fall back (`weknora-rag-search`) |
+| `kb list --space` → exit 3 `auth.forbidden` | Scoped API key without share-metadata capability, or the workspace is not a space member — re-auth / check membership; do not treat it as "no KBs" |

@@ -94,6 +94,13 @@ const (
 	CodeKBIDRequired       ErrorCode = "local.kb_id_required"
 	CodeKBNotFound         ErrorCode = "local.kb_not_found"
 	CodeProjectLinkCorrupt ErrorCode = "local.project_link_corrupt"
+	// Space (organization) resolution codes. Shared-space KBs live outside the
+	// caller's own tenant, so `--kb <name>` can never resolve one; a space
+	// selector that misses or matches several spaces must be distinguishable
+	// from "the KB does not exist", otherwise an agent reads a typo'd space
+	// name as an empty corpus. Both map to exit 1 via the local.* bucket.
+	CodeSpaceNotFound  ErrorCode = "local.space_not_found"
+	CodeSpaceAmbiguous ErrorCode = "local.space_ambiguous"
 	// CodeUserAborted marks a user-cancelled destructive operation (declined a
 	// confirm prompt). Distinct from SilentError so the stderr line still
 	// carries a stable code; distinct from input.* because the user supplied
@@ -451,6 +458,7 @@ func AllCodes() []ErrorCode {
 		CodeLocalUnimplemented, CodeLocalProfileNotFound,
 		CodeKBIDRequired, CodeKBNotFound,
 		CodeProjectLinkCorrupt,
+		CodeSpaceNotFound, CodeSpaceAmbiguous,
 		CodeUserAborted, CodeUploadFileNotFound,
 		CodeSSEStreamAborted, CodeSessionCreateFailed,
 		// operation

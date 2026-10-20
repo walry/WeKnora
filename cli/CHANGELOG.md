@@ -43,6 +43,16 @@ CLI history before v0.3 is recorded in the project root
   keeps the profile registered (use `profile remove` to delete it entirely).
 - `meta.total_count` on paginated list / search output (full result size before
   client-side `--limit` truncation).
+- `kb list --space <name-or-uuid>` / `kb list --shared` and
+  `agent list --space <name-or-uuid>` / `agent list --shared` list what a
+  collaboration space exposes, flattened to rows whose `id` is directly usable
+  as `--kb` / `--agent`. Space names match case-insensitively (exact first, then
+  a unique prefix); new typed codes `local.space_not_found` /
+  `local.space_ambiguous`.
+- Bundled Skill `weknora-rag-search` now carries a shared-space-first answer
+  protocol (UVDoc space before the caller's own workspace) plus
+  `references/shared-space.md`; `weknora-shared` documents that shared-space KBs
+  are UUID-only.
 
 ### Changed
 - JSON, text, and MCP now share one event projector and filtering policy.

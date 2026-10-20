@@ -404,7 +404,9 @@ Agents parse the first colon to extract the typed code. The exit code class (see
 | `local.profile_not_found` | 1 | no | (no canonical hint; check `weknora profile list`) |
 | `local.file_io` | 1 | no | check file permissions under `$XDG_CONFIG_HOME/weknora/` |
 | `local.kb_id_required` | 1 | no | run `weknora link` to bind this directory to a knowledge base, or pass `--kb` |
-| `local.kb_not_found` | 1 | no | list available with `weknora kb list` |
+| `local.kb_not_found` | 1 | no | list available with `weknora kb list`. A KB shared into a collaboration space never matches by name — take its UUID from `weknora kb list --space <space>` |
+| `local.space_not_found` | 1 | no | the active workspace is not a member of that space, or the name is misspelled; list spaces with `weknora api /api/v1/organizations` |
+| `local.space_ambiguous` | 1 | no | the name matched more than one space; re-run `--space` with the space UUID or its full name |
 | `local.keychain_denied` | 1 | no (system-level) | verify keyring access; falls back to file storage |
 | `local.project_link_corrupt` | 1 | no | remove `.weknora/project.yaml` and run `weknora link` again |
 | `local.sse_stream_aborted` | 1 | yes (rerun chat / session ask) | the streaming answer was cut off mid-flight; retry, or pass `--format json` to buffer the full response |
