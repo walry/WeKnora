@@ -1,6 +1,6 @@
 ---
 name: weknora-rag-search
-description: Use when retrieving from or asking questions against a WeKnora knowledge base via the `weknora` CLI — and especially when unsure whether to use `chat`, `session ask`, or `search chunks` for a given goal.
+description: Use when answering a knowledge question for the user via the `weknora` CLI — the default retrieval scope is the `UVDoc` shared space, ahead of the caller's own tenant KBs. Also covers choosing between `chat`, `session ask`, and `search chunks`.
 metadata:
   tested_against: v0.9
 ---
@@ -13,6 +13,36 @@ resolution, the JSON envelope, exit codes, streaming/NDJSON output).
 WeKnora gives you several ways to "ask about a knowledge base." Picking the wrong
 one wastes turns or returns the wrong shape. Use the decision table.
 
+## Default retrieval scope — the `UVDoc` shared space comes first
+
+When the user asks a knowledge question but does **not** name a knowledge base
+(and no agent/`WEKNORA_KB_ID`/directory link is in play), do **not** start from
+`weknora kb list` / `weknora search kb` — both only see KBs *owned by the
+caller's tenant*. The default scope is the shared space named **`UVDoc`**:
+
+1. Find the space: `weknora api /api/v1/organizations` → the entry whose
+   `name` is exactly `UVDoc`.
+2. List the KBs shared into it:
+   `weknora api /api/v1/organizations/<org-id>/shared-knowledge-bases`
+   (or the flat `weknora api /api/v1/shared-knowledge-bases` and filter
+   `org_name == "UVDoc"`).
+3. Answer from those KBs **by UUID** — `weknora chat "<q>" --kb <uuid>` or
+   `weknora search chunks "<q>" --kb <uuid>`.
+4. Only if the space has no usable KB, or retrieval returns nothing relevant,
+   fall back to the caller's own tenant KBs — and say that you did.
+
+Rules that follow from this:
+
+- **Never pass a shared KB's *name* to `--kb`.** Name resolution lists only
+  tenant-owned KBs, so a shared name fails with `local.kb_not_found`. Resolve
+  the UUID first and pass the UUID.
+- Space KBs are often read-only for you (`permission: viewer`). Reads
+  (`chat`, `search chunks`) work; writes/edits are not your job here.
+- If `/api/v1/organizations` has no `UVDoc` row, the tenant has not joined the
+  space — report that instead of silently querying the tenant's own KBs.
+
+Full recipe, including the multi-KB case: `references/shared-space.md`.
+
 ## Pick the command by your goal
 
 | Your goal | Command | LLM synthesis? | Returns |
@@ -21,7 +51,7 @@ one wastes turns or returns the wrong shape. Use the decision table.
 | Answer via a **custom agent** (its own KB scope, tools, web search) | `session ask --agent <id> "<q>"` | yes (+ tools) | streaming answer + tool events |
 | **Raw context chunks** to reason over yourself (no answer) | `search chunks "<q>" --kb <kb>` | no | ranked chunk list |
 | Which **documents** match a keyword (title/filename) | `search docs "<q>" --kb <kb>` | no | document list |
-| Find a **knowledge base** by name | `search kb "<q>"` | no | KB list |
+| Find a **knowledge base** by name (tenant-owned only; space KBs need the API) | `search kb "<q>"` | no | KB list |
 | Find a past **session** by title | `search sessions "<q>"` | no | session list |
 
 ### The three decisions that matter
@@ -44,6 +74,10 @@ one wastes turns or returns the wrong shape. Use the decision table.
   If none resolves it's exit 1 (`local.kb_id_required`); a bad name is exit 1
   (`local.kb_not_found`). Resolve names with `weknora kb list` / `search kb`.
   (`search kb` / `search sessions` are tenant-wide and take no `--kb`.)
+- **`--kb <name>` only resolves tenant-owned KBs.** A KB shared into a space
+  (e.g. `UVDoc`) is invisible to `kb list` / `search kb`, so its name will not
+  resolve — fetch the UUID via the organizations API and pass the UUID
+  (`references/shared-space.md`).
 - `chat` / `session ask` stream **NDJSON** by default. Parse line-by-line; keep
   the `init` event's `session_id` **and** `message_id`. Use `--format text` only
   for a human transcript.
@@ -60,6 +94,13 @@ one wastes turns or returns the wrong shape. Use the decision table.
 ## Quick examples
 
 ```bash
+# default scope: resolve the UVDoc space, then the KBs shared into it
+ORG_ID=$(weknora api /api/v1/organizations --format json \
+  | jq -r '.data.body.data.organizations[] | select(.name=="UVDoc") | .id')
+weknora api "/api/v1/organizations/$ORG_ID/shared-knowledge-bases" --format json \
+  | jq -r '.data.body.data[].knowledge_base.id'
+weknora chat "How do we handle retries?" --kb "$KB_ID" --format text
+
 # raw retrieval to reason over
 weknora search chunks "retry backoff policy" --kb engineering --limit 12
 

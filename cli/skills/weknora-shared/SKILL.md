@@ -68,6 +68,14 @@ the cwd) → error. Read/create commands that operate "inside a project" inherit
 the link; **`search *` and destructive `--all` operations always require an
 explicit `--kb`** (so an agent never silently hits the wrong corpus).
 
+**Name resolution only covers KBs owned by the caller's tenant** — `kb list`,
+`search kb`, and `--kb <name>` all read the tenant KB list. KBs shared into a
+space (organization) are addressed by **UUID** only; discover them with
+`weknora api /api/v1/organizations` and
+`weknora api /api/v1/organizations/<id>/shared-knowledge-bases`. When the user
+asks a question without picking a KB, the default scope is the `UVDoc` shared
+space — see the `weknora-rag-search` skill.
+
 ## 3. Output contract — every command
 
 Default output is `--format json`: a single envelope.
@@ -197,3 +205,5 @@ that to learn a command without scraping the human help table.
 | Auto-adding `-y` to clear an exit-10 | Never; get user approval first (§5) |
 | `weknora chat "..."` prints "garbled" stream | NDJSON by default; use `--format text` for a transcript |
 | `search chunks "q"` → exit 1 `local.kb_id_required` | Pass `--kb <name-or-id>`, set `WEKNORA_KB_ID`, or `weknora link` the dir |
+| `--kb <name>` → `local.kb_not_found` for a KB the user sees in a space | Shared KBs aren't in the tenant list — resolve its UUID via `/api/v1/organizations/<id>/shared-knowledge-bases` (§2) |
+| Question answered from the wrong corpus | Default scope is the `UVDoc` shared space, not `kb list` — see `weknora-rag-search` (§2) |
